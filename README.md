@@ -60,6 +60,7 @@ All original endpoints are kept:
 Added for new UI support:
 - `POST /api/topic/add`
 - `GET /api/readiness`
+- `POST /api/onboarding/persona`
 
 ## UI-to-API Mapping
 
@@ -70,6 +71,7 @@ Added for new UI support:
 - Spaced repetition queue -> `/api/quizzes/due` + topic review dates
 - Exam planning/readiness -> `/api/exam-plan` + `/api/readiness`
 - AI action plan -> `/api/insights/generate`
+- Onboarding learning style + techniques -> `/api/onboarding/persona`
 
 ## Notes
 

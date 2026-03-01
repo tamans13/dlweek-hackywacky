@@ -96,6 +96,17 @@ export interface InsightPayload {
   actions: string[];
 }
 
+export interface OnboardingPersonaTechnique {
+  title: string;
+  description: string;
+}
+
+export interface OnboardingPersonaAnalysis {
+  learningStyle: string;
+  rationale: string;
+  studyTechniques: OnboardingPersonaTechnique[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: {
@@ -211,5 +222,15 @@ export function generateInsights(moduleName: string) {
   return request<{ ok: true; insights: InsightPayload; aiEnabled: boolean }>("/api/insights/generate", {
     method: "POST",
     body: JSON.stringify({ moduleName }),
+  });
+}
+
+export function generateOnboardingPersona(payload: {
+  welcome: Record<string, unknown>;
+  prefs: Record<string, unknown>;
+}) {
+  return request<{ ok: true; analysis: OnboardingPersonaAnalysis; aiEnabled: boolean }>("/api/onboarding/persona", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
