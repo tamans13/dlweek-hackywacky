@@ -1,79 +1,101 @@
 # Brainosaur
 
 Full-stack student learning analytics app with:
-- Existing Node backend (`server.js`) and `/api/*` endpoints preserved
-- New Figma-exported React/Vite UI integrated from ZIP (`src/`)
+- React + Vite frontend (`src/`)
+- Node API server (`server.js`)
+- Supabase-backed user persistence (Postgres + Auth + Storage)
+- OpenAI-powered insights and topic quiz generation from uploaded files
 
-## Run
+## Run Locally
 
 Install dependencies:
+
 ```bash
 npm install
 ```
 
-Run backend (API):
-```bash
-npm run dev:api
-```
+Create environment file:
 
-Run new frontend UI:
-```bash
-npm run dev:ui
-```
-
-Open UI at:
-- `http://localhost:5173`
-
-Optional single server static build:
-```bash
-npm run build:ui
-npm run dev:api
-```
-Then open `http://localhost:3000`.
-
-## Environment
-
-Create `.env` from `.env.example`:
 ```bash
 cp .env.example .env
 ```
 
-Set:
-- `OPENAI_API_KEY=...`
-- `OPENAI_MODEL=gpt-4.1-mini` (or your preferred model)
-- `PORT=3000`
-- `HOST=127.0.0.1`
+Fill in `.env` values (especially Supabase + OpenAI).
 
-## Preserved Backend Endpoints
+Start backend:
 
-All original endpoints are kept:
+```bash
+npm run dev:api
+```
+
+Start frontend:
+
+```bash
+npm run dev:ui
+```
+
+Open:
+- `http://localhost:5173`
+
+## Supabase Setup (Required for account persistence)
+
+1. Create a Supabase project at https://supabase.com.
+2. In Supabase, go to `SQL Editor` and run [`supabase/schema.sql`](supabase/schema.sql).
+3. In `Authentication > Providers > Email`, enable Email/Password.
+4. In `Authentication > Settings`, disable email confirmation for local testing (or keep enabled if you handle verification flow).
+5. In `Project Settings > API`, copy:
+- `Project URL` -> `SUPABASE_URL`
+- `anon public` key -> `SUPABASE_ANON_KEY`
+- `service_role` key -> `SUPABASE_SERVICE_ROLE_KEY`
+6. Add those to `.env`.
+7. Ensure the storage bucket `study-files` exists (the SQL script creates it).
+8. Restart backend after changing env vars.
+
+## What Is Persisted Per User
+
+When user signs in with the same email/password (on onboarding), data is loaded from Supabase and restored:
+- Profile + modules + topic mastery state
+- Study sessions, tab events, quiz attempts
+- Uploaded topic documents
+- AI-generated quizzes and quiz attempts/results
+
+## Topic Upload + AI Quiz Flow
+
+1. Open a topic page.
+2. Use **Upload Documents** to upload topic files.
+3. Click **Generate Quiz** to build quiz questions from extracted file text.
+4. Submit quiz and review correctness.
+5. Refresh/re-login with the same account: documents and quizzes remain available.
+
+## API Endpoints
+
+Existing analytics endpoints:
 - `GET /api/state`
 - `POST /api/profile`
 - `POST /api/study-session/start`
 - `POST /api/study-session/stop`
 - `POST /api/tab-event`
+- `POST /api/topic/add`
+- `POST /api/topic/delete`
 - `POST /api/quiz/submit`
 - `GET /api/quizzes/due`
 - `POST /api/exam-plan`
-- `POST /api/insights/generate`
-
-Added for new UI support:
-- `POST /api/topic/add`
 - `GET /api/readiness`
+- `POST /api/insights/generate`
 - `POST /api/onboarding/persona`
 
-## UI-to-API Mapping
-
-- Onboarding/Profile save -> `/api/profile`
-- Start/stop study session -> `/api/study-session/start|stop`
-- Tab/focus logging -> `/api/tab-event`
-- Topic quiz submit -> `/api/quiz/submit`
-- Spaced repetition queue -> `/api/quizzes/due` + topic review dates
-- Exam planning/readiness -> `/api/exam-plan` + `/api/readiness`
-- AI action plan -> `/api/insights/generate`
-- Onboarding learning style + techniques -> `/api/onboarding/persona`
+New auth/document/AI-quiz endpoints:
+- `POST /api/auth/login`
+- `GET /api/auth/session`
+- `POST /api/topic/files/upload`
+- `GET /api/topic/files?moduleName=...&topicName=...`
+- `POST /api/topic/quiz/generate`
+- `POST /api/topic/quiz/submit`
+- `GET /api/topic/quizzes?moduleName=...&topicName=...`
 
 ## Notes
 
-- If API key is missing, insights fall back to heuristic mode.
-- Backend serves built `dist/` first (if present), otherwise `public/` fallback page.
+- If Supabase env vars are missing, backend falls back to local file mode (`data/app-data.json`) for development.
+- Best quiz generation quality comes from text-like files (`.txt`, `.md`, `.csv`, source code, etc.).
+- PDF uploads are stored, but PDF text extraction is not enabled in this build.
+- If OpenAI key is missing, AI insights/quiz generation fall back to heuristic mode where applicable.

@@ -41,10 +41,11 @@ function readSessionJson<T>(key: string, fallback: T): T {
 
 export default function OnboardingComplete() {
   const navigate = useNavigate();
-  const { saveProfileData } = useAppData();
+  const { authenticate, saveProfileData } = useAppData();
   const [submitting, setSubmitting] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState("");
+  const [authError, setAuthError] = useState("");
   const [aiEnabled, setAiEnabled] = useState(false);
   const [analysis, setAnalysis] = useState<OnboardingPersonaAnalysis>(fallbackAnalysis);
 
@@ -83,10 +84,17 @@ export default function OnboardingComplete() {
 
   const handleGoDashboard = async () => {
     setSubmitting(true);
+    setAuthError("");
     try {
       const welcome = readSessionJson<Record<string, unknown>>("onboarding_welcome", {});
-      const email = String(welcome.email || "");
-      const inferredName = email.includes("@") ? email.split("@")[0] : "";
+      const email = String(welcome.email || "").trim();
+      const password = String(welcome.password || "");
+
+      if (!email || !password) {
+        throw new Error("Missing email/password from onboarding. Go back and enter credentials.");
+      }
+
+      await authenticate(email, password);
 
       await saveProfileData({
         fullName: String(welcome.fullName || welcome.name || inferredName),
@@ -97,6 +105,8 @@ export default function OnboardingComplete() {
         modules: [],
       });
       navigate("/dashboard");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Failed to sign in and save your profile.");
     } finally {
       setSubmitting(false);
     }
@@ -156,6 +166,12 @@ export default function OnboardingComplete() {
           {!analysisLoading && !analysisError && (
             <p className="text-xs text-muted-foreground">
               AI integration: {aiEnabled ? "enabled" : "not configured (heuristic mode)"}
+            </p>
+          )}
+
+          {authError && (
+            <p className="text-xs text-destructive">
+              Authentication failed: {authError}
             </p>
           )}
         </div>

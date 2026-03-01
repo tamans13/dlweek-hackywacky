@@ -1,19 +1,79 @@
-import { useMemo, useRef, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router";
-import { ArrowLeft, Calendar, TrendingDown, AlertCircle, CheckCircle, Upload, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Calendar,
+  TrendingDown,
+  AlertCircle,
+  CheckCircle,
+  Upload,
+  Trash2,
+  FileText,
+  Sparkles,
+  Loader2,
+} from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import {
+  GeneratedQuiz,
+  GeneratedQuizReviewItem,
+  TopicDocument,
+  fetchTopicFiles,
+  fetchTopicQuizzes,
+  generateTopicQuiz,
+  submitTopicQuiz,
+  uploadTopicFiles,
+} from "../lib/api";
 
 function toPct(value: number) {
   return Math.round((value / 10) * 100);
 }
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function TopicDetail() {
   const { moduleId, topicId } = useParams<{ moduleId: string; topicId: string }>();
   const navigate = useNavigate();
-  const { state, loading, error, deleteTopicData, uploadTopicFiles } = useAppData();
+  const { state, loading, error, submitQuizAttempt, deleteTopicData } = useAppData();
+
+  const [form, setForm] = useState({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
+  const [resultMessage, setResultMessage] = useState("");
+
+  const [documents, setDocuments] = useState<TopicDocument[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [resourceLoading, setResourceLoading] = useState(false);
+  const [resourceError, setResourceError] = useState("");
+  const [uploadMessage, setUploadMessage] = useState("");
+
+  const [quizzes, setQuizzes] = useState<GeneratedQuiz[]>([]);
+  const [questionCount, setQuestionCount] = useState("5");
+  const [generatingQuiz, setGeneratingQuiz] = useState(false);
+  const [activeQuizId, setActiveQuizId] = useState("");
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+  const [submittingGeneratedQuiz, setSubmittingGeneratedQuiz] = useState(false);
+  const [quizResult, setQuizResult] = useState<{
+    score: number;
+    total: number;
+    percent: number;
+    review: GeneratedQuizReviewItem[];
+  } | null>(null);
+  const [quizStatusMessage, setQuizStatusMessage] = useState("");
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const moduleNames = state ? state.profile.modules : [];
@@ -78,6 +138,71 @@ export default function TopicDetail() {
       });
   }, [state, moduleName, topicName]);
 
+  const activeQuiz = useMemo(() => {
+    if (!activeQuizId) return null;
+    return quizzes.find((quiz) => quiz.id === activeQuizId) || null;
+  }, [activeQuizId, quizzes]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadResources() {
+      if (!moduleName || !topicName) return;
+      setResourceLoading(true);
+      setResourceError("");
+      try {
+        const [docs, quizList] = await Promise.all([
+          fetchTopicFiles(moduleName, topicName),
+          fetchTopicQuizzes(moduleName, topicName),
+        ]);
+
+        if (cancelled) return;
+
+        setDocuments(docs.documents);
+        setQuizzes(quizList.quizzes);
+
+        if (quizList.quizzes.length) {
+          setActiveQuizId((prev) => prev || quizList.quizzes[0].id);
+        } else {
+          setActiveQuizId("");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setResourceError(err instanceof Error ? err.message : "Failed to load topic resources.");
+      } finally {
+        if (!cancelled) setResourceLoading(false);
+      }
+    }
+
+    void loadResources();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleName, topicName]);
+
+  const handleQuizSubmit = async () => {
+    if (!moduleName || !topicName) return;
+    const pre = Number(form.preScore);
+    const post = Number(form.postScore);
+    const confidence = Number(form.confidence);
+    if (Number.isNaN(pre) || Number.isNaN(post)) return;
+
+    const result = await submitQuizAttempt({
+      moduleName,
+      topicName,
+      preScore: pre,
+      postScore: post,
+      confidence,
+      aiUsed: form.aiUsed,
+    });
+
+    setResultMessage(
+      `Mastery updated ${result.oldMastery.toFixed(2)} -> ${result.newMastery.toFixed(2)} (gain ${result.gain.toFixed(2)}, decay ${result.decay.toFixed(2)})`,
+    );
+    setForm({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
+  };
+
   const handleDeleteTopic = async () => {
     if (!moduleName || !topicName) return;
     if (!window.confirm(`Delete topic "${topicName}" from ${moduleName}? This will remove related quiz/study/tab records.`)) return;
@@ -85,12 +210,107 @@ export default function TopicDetail() {
     navigate(`/dashboard/modules/${toSlug(moduleName)}`);
   };
 
-  const handleUploadChange = async (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!moduleName || !topicName) return;
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    await uploadTopicFiles({ moduleName, topicName, files });
-    e.target.value = "";
+
+    const fileList = Array.from(event.target.files || []);
+    if (!fileList.length) return;
+
+    setUploadingFiles(true);
+    setUploadMessage("");
+    setResourceError("");
+
+    try {
+      const files = await Promise.all(
+        fileList.map(async (file) => ({
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          dataBase64: await readFileAsBase64(file),
+        })),
+      );
+
+      const result = await uploadTopicFiles({ moduleName, topicName, files });
+      setDocuments(result.documents);
+      setUploadMessage(`${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"} uploaded.`);
+    } catch (err) {
+      setResourceError(err instanceof Error ? err.message : "File upload failed.");
+    } finally {
+      setUploadingFiles(false);
+      if (event.target) event.target.value = "";
+    }
+  };
+
+  const handleGenerateQuiz = async () => {
+    if (!moduleName || !topicName) return;
+
+    setGeneratingQuiz(true);
+    setQuizStatusMessage("");
+    setQuizResult(null);
+    setResourceError("");
+
+    try {
+      const count = Math.max(3, Math.min(10, Number(questionCount || 5)));
+      const generated = await generateTopicQuiz({ moduleName, topicName, questionCount: count });
+
+      setQuizStatusMessage(
+        `Generated ${generated.quiz.questions.length} questions from ${generated.sourceDocumentCount} uploaded file${generated.sourceDocumentCount === 1 ? "" : "s"}.`,
+      );
+
+      const latest = await fetchTopicQuizzes(moduleName, topicName);
+      setQuizzes(latest.quizzes);
+      setActiveQuizId(generated.quiz.id);
+      setSelectedAnswers({});
+    } catch (err) {
+      setResourceError(err instanceof Error ? err.message : "Failed to generate quiz.");
+    } finally {
+      setGeneratingQuiz(false);
+    }
+  };
+
+  const handleAnswerChange = (questionId: string, optionIndex: number) => {
+    setSelectedAnswers((prev) => ({ ...prev, [questionId]: optionIndex }));
+  };
+
+  const handleSubmitGeneratedQuiz = async () => {
+    if (!activeQuiz || !moduleName || !topicName) return;
+
+    const answers = activeQuiz.questions.map((question) => {
+      const answer = selectedAnswers[question.id];
+      return Number.isInteger(answer) ? answer : -1;
+    });
+
+    if (answers.some((answer) => answer < 0)) {
+      setResourceError("Please answer every question before submitting the quiz.");
+      return;
+    }
+
+    setSubmittingGeneratedQuiz(true);
+    setResourceError("");
+
+    try {
+      const result = await submitTopicQuiz({ quizId: activeQuiz.id, answers });
+      setQuizResult({
+        score: result.attempt.score,
+        total: result.attempt.total,
+        percent: result.attempt.percent,
+        review: result.review,
+      });
+      setQuizStatusMessage(`Quiz submitted. Score: ${result.attempt.score}/${result.attempt.total} (${result.attempt.percent}%).`);
+
+      const latest = await fetchTopicQuizzes(moduleName, topicName);
+      setQuizzes(latest.quizzes);
+    } catch (err) {
+      setResourceError(err instanceof Error ? err.message : "Failed to submit generated quiz.");
+    } finally {
+      setSubmittingGeneratedQuiz(false);
+    }
+  };
+
+  const loadQuiz = (quizId: string) => {
+    setActiveQuizId(quizId);
+    setSelectedAnswers({});
+    setQuizResult(null);
+    setQuizStatusMessage("");
   };
 
   if (loading && !state) {
@@ -150,6 +370,160 @@ export default function TopicDetail() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <FileText className="w-5 h-5 text-primary" />
+              <h3 className="font-medium text-foreground text-lg">Topic Documents</h3>
+            </div>
+
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
+
+            <div className="flex items-center gap-3 mb-4">
+              <Button variant="outline" disabled={uploadingFiles} onClick={() => fileInputRef.current?.click()}>
+                {uploadingFiles ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {uploadingFiles ? "Uploading..." : "Upload Documents"}
+              </Button>
+              <span className="text-xs text-muted-foreground">Supports text files best for AI quiz generation.</span>
+            </div>
+
+            {uploadMessage && <p className="text-sm text-primary mb-3">{uploadMessage}</p>}
+
+            <div className="space-y-2 max-h-56 overflow-auto pr-1">
+              {resourceLoading && <div className="text-sm text-muted-foreground">Loading documents...</div>}
+              {!resourceLoading && !documents.length && <div className="text-sm text-muted-foreground">No uploaded documents for this topic yet.</div>}
+              {documents.map((doc) => (
+                <div key={doc.id} className="border border-border rounded-lg p-3">
+                  <div className="font-medium text-sm text-foreground truncate">{doc.fileName}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Uploaded {new Date(doc.uploadedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {doc.mimeType}
+                  </div>
+                  <div className="text-xs mt-1 text-muted-foreground">
+                    {doc.textExtracted ? "Text extracted for quiz generation" : "No text extraction available"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles className="w-5 h-5 text-primary" />
+              <h3 className="font-medium text-foreground text-lg">AI Quiz Generator</h3>
+            </div>
+
+            <div className="flex items-end gap-3 mb-4">
+              <div className="w-24">
+                <Label>Questions</Label>
+                <Input
+                  type="number"
+                  min="3"
+                  max="10"
+                  value={questionCount}
+                  onChange={(e) => setQuestionCount(e.target.value)}
+                />
+              </div>
+              <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length}>
+                {generatingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                {generatingQuiz ? "Generating..." : "Generate Quiz"}
+              </Button>
+            </div>
+
+            {quizStatusMessage && <p className="text-sm text-primary mb-3">{quizStatusMessage}</p>}
+
+            <div className="space-y-2 max-h-56 overflow-auto pr-1">
+              {!quizzes.length && <div className="text-sm text-muted-foreground">No generated quizzes yet.</div>}
+              {quizzes.map((quiz) => (
+                <button
+                  key={quiz.id}
+                  type="button"
+                  onClick={() => loadQuiz(quiz.id)}
+                  className={`w-full text-left border rounded-lg p-3 transition-colors ${
+                    activeQuizId === quiz.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {quiz.questions.length} questions · created {new Date(quiz.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Attempts: {quiz.attemptCount}
+                    {quiz.lastAttempt ? ` · latest ${quiz.lastAttempt.score}/${quiz.lastAttempt.total}` : ""}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {resourceError && <div className="text-sm text-destructive">{resourceError}</div>}
+
+        {activeQuiz && (
+          <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h3 className="font-medium text-foreground text-lg">{activeQuiz.title}</h3>
+              <Button onClick={handleSubmitGeneratedQuiz} disabled={submittingGeneratedQuiz}>
+                {submittingGeneratedQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Submit AI Quiz
+              </Button>
+            </div>
+
+            <div className="space-y-5">
+              {activeQuiz.questions.map((question, index) => {
+                const review = quizResult?.review.find((r) => r.questionId === question.id);
+                return (
+                  <div key={question.id} className="border border-border rounded-lg p-4">
+                    <div className="font-medium text-foreground mb-3">
+                      {index + 1}. {question.question}
+                    </div>
+
+                    <div className="space-y-2">
+                      {question.options.map((option, optionIndex) => {
+                        const selected = selectedAnswers[question.id] === optionIndex;
+                        const isCorrect = review?.correctIndex === optionIndex;
+                        const isWrongSelected = review && selected && !review.isCorrect;
+
+                        return (
+                          <label
+                            key={`${question.id}-${optionIndex}`}
+                            className={`flex items-center gap-3 p-2 border rounded-md cursor-pointer ${
+                              selected ? "border-primary bg-primary/5" : "border-border"
+                            } ${isCorrect ? "border-success bg-success/10" : ""} ${isWrongSelected ? "border-destructive bg-destructive/10" : ""}`}
+                          >
+                            <input
+                              type="radio"
+                              name={question.id}
+                              checked={selected}
+                              onChange={() => handleAnswerChange(question.id, optionIndex)}
+                              disabled={Boolean(quizResult)}
+                            />
+                            <span className="text-sm text-foreground">{option}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {review && (
+                      <div className={`mt-3 text-xs ${review.isCorrect ? "text-success" : "text-destructive"}`}>
+                        {review.isCorrect ? "Correct." : "Incorrect."}
+                        {review.explanation ? ` ${review.explanation}` : ""}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {quizResult && (
+              <div className="mt-4 p-4 border border-border rounded-lg bg-muted/20">
+                <div className="text-sm font-medium text-foreground">
+                  Score: {quizResult.score}/{quizResult.total} ({quizResult.percent}%)
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-center gap-2 mb-4">
