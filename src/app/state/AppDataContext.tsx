@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   AuthUser,
   BackendState,
@@ -19,6 +19,7 @@ import {
   uploadTopicDocuments,
   updateExamPlan,
 } from "../lib/api";
+import { startExtensionTracking, stopExtensionTracking } from "../lib/extension";
 
 interface AppDataContextValue {
   state: BackendState | null;
@@ -82,6 +83,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [dueQuizzes, setDueQuizzes] = useState<Array<{ moduleName: string; topicName: string; type: string }>>([]);
   const [readiness, setReadiness] = useState<Array<{ moduleName: string; score: number; reason: string; examPlan: any }>>([]);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const lastSyncedSessionId = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!hasAuthSession()) {
@@ -134,6 +136,41 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     setLoading(false);
   }, []);
+  // Keep extension tracking synced to active study session state.
+  useEffect(() => {
+    if (!state?.studySessions) return;
+
+    const activeSession = [...state.studySessions].reverse().find((session) => !session.endAt) || null;
+    if (activeSession?.id === lastSyncedSessionId.current) return;
+
+    if (activeSession?.id) {
+      lastSyncedSessionId.current = activeSession.id;
+      startExtensionTracking(activeSession.id).catch(() => { });
+    } else {
+      lastSyncedSessionId.current = null;
+      stopExtensionTracking("no_active_study_session").catch(() => { });
+    }
+  }, [state]);
+
+  // Handle telemetry + terminate events from the Chrome extension.
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || data.source !== "brainosaur-extension") return;
+
+      const payload = data.payload;
+
+      if (payload?.event === "terminate_session" && payload.sessionId) {
+        await stopStudySession(payload.sessionId);
+        await refresh();
+        await stopExtensionTracking(payload.reason || "terminated_from_overlay").catch(() => { });
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [refresh]);
 
   const saveProfileData = useCallback(
     async (payload: { fullName?: string; email?: string; university: string; yearOfStudy: string; courseOfStudy: string; modules: string[] }) => {

@@ -1,0 +1,15 @@
+{
+  "name": "chrome-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension that tracks tab switching and sends events to the Brainosaur web app for focus vs distraction metrics.",
+  "main": "background.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^24.37.5"
+  }
+}

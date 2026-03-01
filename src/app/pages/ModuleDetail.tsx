@@ -10,6 +10,7 @@ import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { addTopic } from "../lib/api";
 import { daysUntil, formatDate } from "../lib/format";
+import { startExtensionTracking, stopExtensionTracking } from "../lib/extension";
 
 function formatDuration(seconds: number) {
   const hrs = Math.floor(seconds / 3600);
@@ -114,12 +115,16 @@ export default function ModuleDetail() {
 
   const handleStartStudy = async () => {
     if (!moduleName || !currentTopic) return;
-    await startSession(moduleName, currentTopic);
+    const sessionId = await startSession(moduleName, currentTopic);
+    if (sessionId) {
+      await startExtensionTracking(sessionId).catch(() => { });
+    }
   };
 
   const handleEndStudy = async () => {
     if (!activeSession) return;
     await stopSession(activeSession.id);
+    await stopExtensionTracking("user_ended_session").catch(() => { });
     const takeQuiz = window.confirm("Session ended. Take a quiz for this topic now?");
     if (takeQuiz) {
       navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(activeSession.topicName)}`);
@@ -195,8 +200,20 @@ export default function ModuleDetail() {
   }
 
   const readinessInfo = readiness.find((item) => item.moduleName === moduleName);
-  const moduleReadiness = readinessInfo?.score || 0;
-  const readinessReason = readinessInfo?.reason || "No data yet";
+
+  const fallbackReadiness =
+    state && state.modules[moduleName]
+      ? Math.round(
+          (topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.55 +
+            (Number(topicsCovered || 0) / Math.max(1, Number(totalTopics || topics.length))) * 100 * 0.35 +
+            10,
+        )
+      : 0;
+
+  const moduleReadiness = Math.min(100, readinessInfo?.score ?? fallbackReadiness);
+
+  const readinessReason =
+    readinessInfo?.reason ?? (moduleReadiness ? "Estimated locally" : "No data yet");
 
   return (
     <div className="min-h-screen">

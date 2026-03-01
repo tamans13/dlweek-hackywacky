@@ -1,19 +1,43 @@
 /**
- * Brainosaur Tab Tracker - Content Script
- * Forwards extension messages to the page via postMessage.
+ * Brainosaur Content Script
+ * Bridges web app postMessage <-> extension runtime messaging.
  */
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.source !== "brainosaur-extension" || !message.payload) {
-    sendResponse({ ok: false });
-    return;
-  }
-  try {
+
+const APP_SOURCE = "brainosaur-webapp";
+const EXT_SOURCE = "brainosaur-extension";
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+
+  const data = event.data;
+  if (!data || data.source !== APP_SOURCE || !data.requestId || !data.payload) return;
+
+  chrome.runtime.sendMessage(data.payload, (response) => {
+    const error = chrome.runtime.lastError?.message || null;
     window.postMessage(
-      { source: "brainosaur-extension", payload: message.payload },
+      {
+        source: EXT_SOURCE,
+        bridge: true,
+        requestId: data.requestId,
+        response: response || null,
+        error
+      },
       window.location.origin
     );
-    sendResponse({ ok: true });
+  });
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  try {
+    if (message?.source === EXT_SOURCE && message?.payload) {
+      window.postMessage({ source: EXT_SOURCE, payload: message.payload }, window.location.origin);
+      sendResponse({ ok: true });
+      return;
+    }
+
+    sendResponse({ ok: true, ignored: true });
   } catch (e) {
     sendResponse({ ok: false, error: String(e) });
   }
 });
+
