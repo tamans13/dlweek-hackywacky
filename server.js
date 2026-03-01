@@ -520,11 +520,6 @@ function retentionDecay(topic, currentTimeIso) {
   return clamp(days * baseDecayPerDay * masteryFactor, 0, 2.5);
 }
 
-function learningGain(preScore, postScore) {
-  const denom = Math.max(1, 100 - preScore);
-  return (postScore - preScore) / denom;
-}
-
 function reviewDays(mastery) {
   if (mastery < 4) return 2;
   if (mastery < 6) return 4;
@@ -992,12 +987,21 @@ function isTextLikeFile(fileName, mimeType) {
 }
 
 function extractTextFromFile(fileName, mimeType, buffer) {
-  const ext = path.extname(String(fileName || '')).toLowerCase();}
+  const ext = path.extname(String(fileName || '')).toLowerCase();
   if (!isTextLikeFile(fileName, mimeType)) {
     if (ext === '.pdf') {
       return 'PDF uploaded. Text extraction is not enabled in this build; convert key sections to .txt/.md for quiz generation quality.';
     }
-    return '';}
+    return '';
+  }
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+  try {
+    return buffer.toString('utf8', 0, MAX_EXTRACTED_TEXT_CHARS);
+  } catch {
+    return '';
+  }
+}
+
 function safePathPart(value) {
   const text = String(value || '').trim();
   const cleaned = text.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);

@@ -216,9 +216,10 @@ interface RequestOptions {
 
 async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const useAuth = options?.auth !== false;
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const headers = new Headers(init?.headers || {});
 
-  if (!headers.has("Content-Type")) {
+  if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
