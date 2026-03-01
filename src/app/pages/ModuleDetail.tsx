@@ -35,6 +35,10 @@ export default function ModuleDetail() {
   const moduleState = moduleName && state ? state.modules[moduleName] : null;
   const examPlan = moduleName && state ? state.examPlans[moduleName] : null;
 
+  useEffect(() => {
+    (window as unknown as { __brainosaurModule?: string }).__brainosaurModule = moduleName || undefined;
+  }, [moduleName]);
+
   const topics = useMemo(() => {
     if (!moduleState) return [];
     return Object.values(moduleState.topics)
