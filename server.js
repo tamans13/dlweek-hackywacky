@@ -992,12 +992,12 @@ function isTextLikeFile(fileName, mimeType) {
 }
 
 function extractTextFromFile(fileName, mimeType, buffer) {
-  const ext = path.extname(String(fileName || '')).toLowerCase();
+  const ext = path.extname(String(fileName || '')).toLowerCase();}
   if (!isTextLikeFile(fileName, mimeType)) {
     if (ext === '.pdf') {
       return 'PDF uploaded. Text extraction is not enabled in this build; convert key sections to .txt/.md for quiz generation quality.';
     }
-    return '';
+    return '';}
 function safePathPart(value) {
   const text = String(value || '').trim();
   const cleaned = text.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);

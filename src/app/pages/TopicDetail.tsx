@@ -632,7 +632,7 @@ export default function TopicDetail() {
         </div>
 
         <div className="flex justify-end gap-3">
-          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => void handleUploadChange(e)} />
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <Upload className="w-4 h-4 mr-2" />
             Upload Documents
