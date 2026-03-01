@@ -94,23 +94,23 @@ export default function TopicDetail() {
 
   const masteryTrend = useMemo(() => {
     if (!topic) return [];
+    if (!attempts.length) {
+      return [
+        {
+          date: new Date(topic.lastInteractionAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+          mastery: 0,
+        },
+      ];
+    }
     const historyPoints = topic.history.map((h) => ({
       date: new Date(h.at).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
       mastery: toPct(h.newMastery),
     }));
-    if (!historyPoints.length) {
-      return [
-        {
-          date: new Date(topic.lastInteractionAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-          mastery: toPct(topic.estimatedMasteryNow ?? topic.mastery),
-        },
-      ];
-    }
     return historyPoints;
-  }, [topic]);
+  }, [topic, attempts.length]);
 
   const weaknesses = useMemo(() => {
-    if (!topic) return [];
+    if (!topic || !attempts.length) return ["No quiz attempts yet for this topic."];
     const recentAttempts = attempts.slice(-5);
     const lowConfidence = recentAttempts.filter((a) => a.confidence <= 2).length;
     const dropCount = recentAttempts.filter((a) => a.postScore < a.preScore).length;
@@ -334,9 +334,9 @@ export default function TopicDetail() {
     );
   }
 
-  const masteryNow = topic.estimatedMasteryNow ?? topic.mastery;
+  const masteryNow = attempts.length ? (topic.estimatedMasteryNow ?? topic.mastery) : 0;
   const masteryPct = toPct(masteryNow);
-  const retentionDecay = Math.max(0, Math.round((topic.mastery - masteryNow) * 10));
+  const retentionDecay = attempts.length ? Math.max(0, Math.round((topic.mastery - masteryNow) * 10)) : 0;
   const risk = retentionDecay > 30 ? "high" : retentionDecay > 12 ? "medium" : "low";
 
   return (
@@ -370,29 +370,6 @@ export default function TopicDetail() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            <div className="md:col-span-1">
-              <Label>Pre-Quiz</Label>
-              <Input type="number" min="0" max="100" value={form.preScore} onChange={(e) => setForm((x) => ({ ...x, preScore: e.target.value }))} />
-            </div>
-            <div className="md:col-span-1">
-              <Label>Post-Quiz</Label>
-              <Input type="number" min="0" max="100" value={form.postScore} onChange={(e) => setForm((x) => ({ ...x, postScore: e.target.value }))} />
-            </div>
-            <div className="md:col-span-1">
-              <Label>Confidence (1-5)</Label>
-              <Input type="number" min="1" max="5" value={form.confidence} onChange={(e) => setForm((x) => ({ ...x, confidence: e.target.value }))} />
-            </div>
-            <label className="md:col-span-1 text-sm flex items-center gap-2">
-              <input type="checkbox" checked={form.aiUsed} onChange={(e) => setForm((x) => ({ ...x, aiUsed: e.target.checked }))} />
-              Used AI help
-            </label>
-            <Button className="md:col-span-1" onClick={handleQuizSubmit}>Submit Quiz</Button>
-          </div>
-          {resultMessage && <p className="text-sm text-primary mt-3">{resultMessage}</p>}
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -655,10 +632,33 @@ export default function TopicDetail() {
         </div>
 
         <div className="flex justify-end gap-3">
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => void handleUploadChange(e)} />
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+            <Upload className="w-4 h-4 mr-2" />
+            Upload Documents
+          </Button>
           <Button variant="destructive" onClick={handleDeleteTopic}>
             <Trash2 className="w-4 h-4 mr-2" />
             Delete Topic
           </Button>
+        </div>
+
+        <div className="bg-card border border-border rounded-lg p-5">
+          <h3 className="font-medium text-foreground text-lg mb-3">Uploaded Documents</h3>
+          <div className="space-y-2">
+            {!topic.documents?.length && <div className="text-sm text-muted-foreground">No uploaded documents yet.</div>}
+            {(topic.documents || []).map((doc) => (
+              <a
+                key={doc.id}
+                href={doc.path}
+                target="_blank"
+                rel="noreferrer"
+                className="block p-3 border border-border rounded-lg text-sm text-foreground hover:bg-muted/40 transition-colors"
+              >
+                {doc.name}
+              </a>
+            ))}
+          </div>
         </div>
       </div>
     </div>

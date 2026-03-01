@@ -16,6 +16,7 @@ import {
   startStudySession,
   stopStudySession,
   submitQuiz,
+  uploadTopicDocuments,
   updateExamPlan,
 } from "../lib/api";
 
@@ -31,6 +32,8 @@ interface AppDataContextValue {
   authenticate: (email: string, password: string) => Promise<void>;
   logout: () => void;
   saveProfileData: (payload: {
+    fullName?: string;
+    email?: string;
     university: string;
     yearOfStudy: string;
     courseOfStudy: string;
@@ -65,6 +68,7 @@ interface AppDataContextValue {
     topicsCovered: number;
     topicsTested: string[];
   }) => Promise<{ score: number; reason: string }>;
+  uploadTopicFiles: (payload: { moduleName: string; topicName: string; files: File[] }) => Promise<void>;
   deleteTopicData: (payload: { moduleName: string; topicName: string }) => Promise<void>;
   runInsights: (moduleName?: string) => Promise<{ summary: string; actions: string[] }>;
 }
@@ -132,7 +136,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const saveProfileData = useCallback(
-    async (payload: { university: string; yearOfStudy: string; courseOfStudy: string; modules: string[] }) => {
+    async (payload: { fullName?: string; email?: string; university: string; yearOfStudy: string; courseOfStudy: string; modules: string[] }) => {
       await saveProfile(payload);
       await refresh();
     },
@@ -197,6 +201,14 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     [refresh],
   );
 
+  const uploadTopicFiles = useCallback(
+    async (payload: { moduleName: string; topicName: string; files: File[] }) => {
+      await uploadTopicDocuments(payload);
+      await refresh();
+    },
+    [refresh],
+  );
+
   const runInsights = useCallback(async (moduleName?: string) => {
     const result = await generateInsights(moduleName);
     await refresh();
@@ -221,6 +233,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       logTab,
       submitQuizAttempt,
       saveExamPlan,
+      uploadTopicFiles,
       deleteTopicData,
       runInsights,
     }),
@@ -240,6 +253,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       logTab,
       submitQuizAttempt,
       saveExamPlan,
+      uploadTopicFiles,
       deleteTopicData,
       runInsights,
     ],

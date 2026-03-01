@@ -1,4 +1,6 @@
 export interface ProfileData {
+  fullName: string;
+  email: string;
   university: string;
   yearOfStudy: string;
   courseOfStudy: string;
@@ -9,6 +11,12 @@ export interface TopicState {
   topicName: string;
   mastery: number;
   estimatedMasteryNow?: number;
+  documents?: Array<{
+    id: string;
+    name: string;
+    path: string;
+    uploadedAt: string;
+  }>;
   createdAt: string;
   lastInteractionAt: string;
   lastQuizAt: string | null;
@@ -293,7 +301,14 @@ export function fetchState() {
   return request<BackendState>("/api/state");
 }
 
-export function saveProfile(payload: ProfileData) {
+export function saveProfile(payload: {
+  fullName?: string;
+  email?: string;
+  university: string;
+  yearOfStudy: string;
+  courseOfStudy: string;
+  modules: string[];
+}) {
   return request<{ ok: true; profile: ProfileData }>("/api/profile", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -464,4 +479,24 @@ export function generateOnboardingPersona(payload: {
     },
     { auth: false },
   );
+}
+
+export function uploadTopicDocuments(payload: {
+  moduleName: string;
+  topicName: string;
+  files: File[];
+}) {
+  const form = new FormData();
+  form.append("moduleName", payload.moduleName);
+  form.append("topicName", payload.topicName);
+  for (const file of payload.files) {
+    form.append("files", file);
+  }
+  return request<{
+    ok: true;
+    documents: Array<{ id: string; name: string; path: string; uploadedAt: string }>;
+  }>("/api/topic/upload", {
+    method: "POST",
+    body: form,
+  });
 }

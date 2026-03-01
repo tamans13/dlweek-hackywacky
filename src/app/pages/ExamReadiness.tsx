@@ -17,8 +17,8 @@ export default function ExamReadiness() {
 
   const [moduleName, setModuleName] = useState("");
   const [examDate, setExamDate] = useState("");
-  const [topicsCovered, setTopicsCovered] = useState("");
   const [topicsTested, setTopicsTested] = useState<string[]>([]);
+  const [topicsPopoverOpen, setTopicsPopoverOpen] = useState(false);
 
   useEffect(() => {
     if (!moduleName && moduleNames.length) {
@@ -31,11 +31,9 @@ export default function ExamReadiness() {
     const plan = state.examPlans[moduleName];
     if (plan) {
       setExamDate(plan.examDate);
-      setTopicsCovered(String(plan.topicsCovered));
       setTopicsTested(plan.topicsTested || []);
     } else {
       setExamDate("");
-      setTopicsCovered("0");
       setTopicsTested([]);
     }
   }, [moduleName, state]);
@@ -44,6 +42,11 @@ export default function ExamReadiness() {
     if (!state || !moduleName) return [];
     return Object.keys(state.modules[moduleName]?.topics || {}).sort((a, b) => a.localeCompare(b));
   }, [state, moduleName]);
+
+  useEffect(() => {
+    setTopicsTested((prev) => prev.filter((topicName) => moduleTopicOptions.includes(topicName)));
+  }, [moduleTopicOptions]);
+
   const topicsTriggerLabel = useMemo(() => {
     if (!topicsTested.length) return "Select topics";
     if (topicsTested.length <= 2) return topicsTested.join(", ");
@@ -57,11 +60,22 @@ export default function ExamReadiness() {
       const examPlan = state.examPlans[name];
       const hasExamPlan = Boolean(examPlan?.examDate);
       const selectedTopics = hasExamPlan ? examPlan.topicsTested || [] : [];
+      const attemptsByTopic = new Map<string, number[]>();
+      state.quizAttempts
+        .filter((q) => q.moduleName === name)
+        .forEach((attempt) => {
+          const list = attemptsByTopic.get(attempt.topicName) || [];
+          list.push(attempt.postScore);
+          attemptsByTopic.set(attempt.topicName, list);
+        });
       const topicsTested = selectedTopics
         .map((topicName) => state.modules[name]?.topics?.[topicName])
         .filter(Boolean)
         .map((topic) => {
-          const mastery = Math.round(((topic.estimatedMasteryNow ?? topic.mastery) / 10) * 100);
+          const scores = attemptsByTopic.get(topic.topicName) || [];
+          const mastery = scores.length
+            ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
+            : 0;
           return {
             name: topic.topicName,
             mastery,
@@ -86,7 +100,7 @@ export default function ExamReadiness() {
       moduleName,
       examDate,
       totalTopics: topicsTested.length,
-      topicsCovered: Number(topicsCovered || 0),
+      topicsCovered: topicsTested.length,
       topicsTested,
     });
   };
@@ -151,8 +165,8 @@ export default function ExamReadiness() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>All Topics</Label>
-                <Popover>
+                <Label>Topics Tested</Label>
+                <Popover open={topicsPopoverOpen} onOpenChange={setTopicsPopoverOpen}>
                   <PopoverTrigger asChild>
                     <Button variant="outline" className="w-full justify-between font-normal">
                       <span className="truncate">{topicsTriggerLabel}</span>
@@ -176,8 +190,8 @@ export default function ExamReadiness() {
                 <p className="text-xs text-muted-foreground">Select all topics that are tested in this exam.</p>
               </div>
               <div className="space-y-2">
-                <Label>Topics Covered</Label>
-                <Input type="number" value={topicsCovered} onChange={(e) => setTopicsCovered(e.target.value)} />
+                <Label>Number of Topics</Label>
+                <Input value={String(topicsTested.length)} readOnly className="bg-muted/50" />
               </div>
             </div>
             <Button onClick={handleSaveExam}>Save</Button>
@@ -252,7 +266,7 @@ export default function ExamReadiness() {
                           {topic.mastery}%
                         </span>
                         {topic.needsReview && (
-                          <span className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive font-medium">Needs Urgent Review</span>
+                          <span className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive font-medium">Needs urgent review</span>
                         )}
                       </div>
                     </div>
@@ -280,7 +294,7 @@ export default function ExamReadiness() {
             <div className="text-3xl font-medium text-foreground mb-1">
               {readinessByModule.reduce((sum, exam) => sum + exam.topicsTested.filter((t) => t.needsReview).length, 0)}
             </div>
-            <div className="text-sm text-muted-foreground">Topics Need Review</div>
+            <div className="text-sm text-muted-foreground">Topics Tested Need Review</div>
           </div>
         </div>
       </div>

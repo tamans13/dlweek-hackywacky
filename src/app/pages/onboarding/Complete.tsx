@@ -97,6 +97,8 @@ export default function OnboardingComplete() {
       await authenticate(email, password);
 
       await saveProfileData({
+        fullName: String(welcome.fullName || welcome.name || inferredName),
+        email,
         university: String(welcome.university || ""),
         yearOfStudy: String(welcome.year || ""),
         courseOfStudy: String(welcome.course || ""),

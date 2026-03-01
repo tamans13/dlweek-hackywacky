@@ -1,8 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Clock, AlertTriangle, Info, ArrowRight } from "lucide-react";
 import { Link } from "react-router";
-import { Button } from "../components/ui/button";
 import { useAppData } from "../state/AppDataContext";
 
 export default function Insights() {
@@ -10,6 +9,7 @@ export default function Insights() {
   const [insightSummary, setInsightSummary] = useState("");
   const [insightActions, setInsightActions] = useState<string[]>([]);
   const [insightLoading, setInsightLoading] = useState(false);
+  const [insightBootstrapped, setInsightBootstrapped] = useState(false);
 
   const accuracyByTimeData = useMemo(() => {
     if (!state) return [];
@@ -95,6 +95,12 @@ export default function Insights() {
     }
   };
 
+  useEffect(() => {
+    if (!state || insightBootstrapped) return;
+    setInsightBootstrapped(true);
+    void handleGenerateInsights();
+  }, [state, insightBootstrapped]);
+
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading insights...</div>;
   }
@@ -119,11 +125,7 @@ export default function Insights() {
               <Info className="w-5 h-5" />
             </button>
           </div>
-          <div className="mt-4">
-            <Button onClick={handleGenerateInsights} disabled={insightLoading}>
-              {insightLoading ? "Generating..." : "Generate Insights"}
-            </Button>
-          </div>
+          {insightLoading && <div className="mt-4 text-sm text-muted-foreground">Generating insights...</div>}
           {!!insightSummary && (
             <div className="mt-4 p-4 rounded-lg border border-primary/30 bg-primary/5">
               <p className="text-sm text-foreground mb-2">{insightSummary}</p>

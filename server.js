@@ -998,6 +998,104 @@ function extractTextFromFile(fileName, mimeType, buffer) {
       return 'PDF uploaded. Text extraction is not enabled in this build; convert key sections to .txt/.md for quiz generation quality.';
     }
     return '';
+function safePathPart(value) {
+  const text = String(value || '').trim();
+  const cleaned = text.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  return cleaned || 'unknown';
+}
+
+function parseMultipartContentDisposition(headerLine) {
+  const nameMatch = /name="([^"]+)"/i.exec(headerLine);
+  const fileMatch = /filename="([^"]*)"/i.exec(headerLine);
+  return {
+    fieldName: nameMatch ? nameMatch[1] : '',
+    filename: fileMatch ? fileMatch[1] : '',
+  };
+}
+
+function parseMultipartBody(buffer, boundary) {
+  const raw = buffer.toString('latin1');
+  const delim = `--${boundary}`;
+  const parts = raw.split(delim).slice(1, -1);
+  const fields = {};
+  const files = [];
+
+  for (const partRaw of parts) {
+    let part = partRaw;
+    if (part.startsWith('\r\n')) part = part.slice(2);
+    if (part.endsWith('\r\n')) part = part.slice(0, -2);
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd === -1) continue;
+
+    const headersText = part.slice(0, headerEnd);
+    const bodyText = part.slice(headerEnd + 4);
+    const headerLines = headersText.split('\r\n');
+    const disposition = headerLines.find((line) => line.toLowerCase().startsWith('content-disposition:'));
+    if (!disposition) continue;
+    const { fieldName, filename } = parseMultipartContentDisposition(disposition);
+    if (!fieldName) continue;
+
+    const contentTypeLine = headerLines.find((line) => line.toLowerCase().startsWith('content-type:'));
+    const contentType = contentTypeLine ? contentTypeLine.split(':')[1].trim() : 'application/octet-stream';
+    const valueBuffer = Buffer.from(bodyText, 'latin1');
+
+    if (filename) {
+      files.push({
+        fieldName,
+        filename: path.basename(filename),
+        contentType,
+        buffer: valueBuffer,
+      });
+    } else {
+      fields[fieldName] = valueBuffer.toString('utf8');
+    }
+  }
+
+  return { fields, files };
+}
+
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = String(req.headers['content-type'] || '');
+    const boundaryMatch = /boundary=([^;]+)/i.exec(contentType);
+    if (!boundaryMatch) {
+      reject(new Error('Missing multipart boundary'));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > 25_000_000) {
+        reject(new Error('Upload too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    req.on('end', () => {
+      try {
+        const full = Buffer.concat(chunks);
+        resolve(parseMultipartBody(full, boundary));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function apiHandler(req, res, pathname) {
+  const data = loadData();
+  if (!data.profile || typeof data.profile !== 'object') data.profile = {};
+  if (typeof data.profile.fullName !== 'string') data.profile.fullName = '';
+  if (typeof data.profile.email !== 'string') data.profile.email = '';
+
+  if (req.method === 'GET' && pathname === '/api/state') {
+    for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    saveData(data);
+    return send(res, 200, { ...data, aiEnabled: Boolean(OPENAI_API_KEY) });
   }
 
   const text = buffer.toString('utf8').replace(/\u0000/g, '');
