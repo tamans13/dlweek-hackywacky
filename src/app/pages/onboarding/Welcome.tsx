@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Brain } from "lucide-react";
+
 
 export default function OnboardingWelcome() {
   const navigate = useNavigate();
@@ -25,11 +25,16 @@ export default function OnboardingWelcome() {
       {/* Header */}
       <div className="text-center space-y-8 py-8">
         <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Brain className="w-10 h-10 text-primary" />
+          <div className="w-48 h-48 rounded-2xl overflow-hidden bg-primary/10 flex items-center justify-center">
+            <video
+              src="/Brainosaur.mp4"
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover"
+            />
           </div>
         </div>
-        
         <div className="space-y-4">
           <h1 className="text-5xl font-medium text-foreground">
             Understand How You Learn.
@@ -47,13 +52,12 @@ export default function OnboardingWelcome() {
           <Input
             id="email"
             type="email"
-            placeholder="you@university.edu"
+            placeholder="your email"
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
             className="bg-input-background"
           />
         </div>
-
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
           <Input
@@ -65,7 +69,6 @@ export default function OnboardingWelcome() {
             className="bg-input-background"
           />
         </div>
-
         <div className="space-y-2">
           <Label htmlFor="university">School</Label>
           <Input
@@ -76,7 +79,6 @@ export default function OnboardingWelcome() {
             className="bg-input-background"
           />
         </div>
-
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="course">Course</Label>
@@ -88,7 +90,6 @@ export default function OnboardingWelcome() {
               className="bg-input-background"
             />
           </div>
-
           <div className="space-y-2">
             <Label htmlFor="year">Year</Label>
             <Input
@@ -100,7 +101,6 @@ export default function OnboardingWelcome() {
             />
           </div>
         </div>
-
         <Button
           onClick={handleContinue}
           disabled={!formData.university || !formData.course || !formData.year}
