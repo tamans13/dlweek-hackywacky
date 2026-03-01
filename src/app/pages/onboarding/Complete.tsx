@@ -85,8 +85,12 @@ export default function OnboardingComplete() {
     setSubmitting(true);
     try {
       const welcome = readSessionJson<Record<string, unknown>>("onboarding_welcome", {});
+      const email = String(welcome.email || "");
+      const inferredName = email.includes("@") ? email.split("@")[0] : "";
 
       await saveProfileData({
+        fullName: String(welcome.fullName || welcome.name || inferredName),
+        email,
         university: String(welcome.university || ""),
         yearOfStudy: String(welcome.year || ""),
         courseOfStudy: String(welcome.course || ""),
