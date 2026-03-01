@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -28,7 +28,7 @@ function dueInLabel(dateIso: string) {
 export default function ModuleDetail() {
   const { moduleId } = useParams();
   const navigate = useNavigate();
-  const { state, loading, error, startSession, stopSession, saveExamPlan, saveProfileData, refresh } = useAppData();
+  const { state, readiness, loading, error, startSession, stopSession, saveExamPlan, saveProfileData, uploadTopicFiles, refresh } = useAppData();
 
   const moduleNames = state ? state.profile.modules : [];
   const moduleName = fromSlugMatch(moduleId || "", moduleNames || []);
@@ -41,11 +41,18 @@ export default function ModuleDetail() {
 
   const topics = useMemo(() => {
     if (!moduleState) return [];
+    const moduleAttempts = state?.quizAttempts.filter((q) => q.moduleName === moduleName) || [];
+    const attemptsByTopic = new Map<string, number>();
+    for (const attempt of moduleAttempts) {
+      attemptsByTopic.set(attempt.topicName, (attemptsByTopic.get(attempt.topicName) || 0) + 1);
+    }
+
     return Object.values(moduleState.topics)
       .map((topic) => {
-        const estimated = topic.estimatedMasteryNow ?? topic.mastery;
+        const hasAttempts = (attemptsByTopic.get(topic.topicName) || 0) > 0;
+        const estimated = hasAttempts ? (topic.estimatedMasteryNow ?? topic.mastery) : 0;
         const masteryPct = Math.round((estimated / 10) * 100);
-        const retentionPct = Math.round((estimated / Math.max(1, topic.mastery)) * 100);
+        const retentionPct = hasAttempts ? Math.round((estimated / Math.max(1, topic.mastery)) * 100) : 0;
         const status = masteryPct >= 85 ? "mastered" : masteryPct >= 65 ? "good" : "review";
         return {
           id: toSlug(topic.topicName),
@@ -54,10 +61,11 @@ export default function ModuleDetail() {
           retentionPct,
           status,
           nextReviewAt: topic.nextReviewAt,
+          documents: topic.documents || [],
         };
       })
       .sort((a, b) => a.masteryPct - b.masteryPct);
-  }, [moduleState]);
+  }, [moduleState, state, moduleName]);
 
   const spacedRepetition = useMemo(
     () => [...topics].sort((a, b) => new Date(a.nextReviewAt).getTime() - new Date(b.nextReviewAt).getTime()).slice(0, 6),
@@ -79,6 +87,8 @@ export default function ModuleDetail() {
   const [examDate, setExamDate] = useState(examPlan?.examDate || "");
   const [totalTopics, setTotalTopics] = useState(examPlan?.totalTopics?.toString() || "");
   const [topicsCovered, setTopicsCovered] = useState(examPlan?.topicsCovered?.toString() || "");
+  const [uploadTopicName, setUploadTopicName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setExamDate(examPlan?.examDate || "");
@@ -150,6 +160,19 @@ export default function ModuleDetail() {
     navigate("/dashboard/modules");
   };
 
+  const handleUploadClick = (topicName: string) => {
+    setUploadTopicName(topicName);
+    fileInputRef.current?.click();
+  };
+
+  const handleUploadChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    if (!moduleName || !uploadTopicName) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    await uploadTopicFiles({ moduleName, topicName: uploadTopicName, files });
+    e.target.value = "";
+  };
+
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading module...</div>;
   }
@@ -171,11 +194,9 @@ export default function ModuleDetail() {
     );
   }
 
-  const moduleReadiness = state && state.modules[moduleName]
-    ? Math.round(((topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.55 +
-        ((Number(topicsCovered || 0) / Math.max(1, Number(totalTopics || topics.length))) * 100) * 0.35 +
-        10))
-    : 0;
+  const readinessInfo = readiness.find((item) => item.moduleName === moduleName);
+  const moduleReadiness = readinessInfo?.score || 0;
+  const readinessReason = readinessInfo?.reason || "No data yet";
 
   return (
     <div className="min-h-screen">
@@ -222,8 +243,10 @@ export default function ModuleDetail() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">Exam Readiness:</span>
                   <span className="text-lg font-medium text-foreground">{moduleReadiness}%</span>
+                  {moduleReadiness === 0 && <span className="text-sm text-muted-foreground">No data yet</span>}
                 </div>
               </div>
+              {moduleReadiness === 0 && <p className="text-sm text-muted-foreground mt-1">{readinessReason}</p>}
             </div>
             <Dialog open={showAddExamDialog} onOpenChange={setShowAddExamDialog}>
               <DialogTrigger asChild>
@@ -379,14 +402,41 @@ export default function ModuleDetail() {
                 </div>
 
                 <div className="flex gap-2 mt-4">
-                  <Button variant="outline" size="sm" className="flex-1" onClick={(e) => e.preventDefault()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleUploadClick(topic.name);
+                    }}
+                  >
                     <Upload className="w-3 h-3 mr-1" />
                     Upload Notes
                   </Button>
                 </div>
+                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{topic.documents.length} file{topic.documents.length === 1 ? "" : "s"}</span>
+                  {topic.documents[0] && (
+                    <span className="truncate max-w-[180px]" title={topic.documents[0].name}>
+                      {topic.documents[0].name}
+                    </span>
+                  )}
+                </div>
               </Link>
             ))}
           </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              e.stopPropagation();
+              void handleUploadChange(e);
+            }}
+          />
         </div>
 
         <div className="flex justify-end">

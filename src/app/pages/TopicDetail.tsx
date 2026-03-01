@@ -1,12 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, type ChangeEvent } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { ArrowLeft, Calendar, TrendingDown, AlertCircle, CheckCircle, Upload, Trash2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
 
 function toPct(value: number) {
   return Math.round((value / 10) * 100);
@@ -15,9 +13,7 @@ function toPct(value: number) {
 export default function TopicDetail() {
   const { moduleId, topicId } = useParams<{ moduleId: string; topicId: string }>();
   const navigate = useNavigate();
-  const { state, loading, error, submitQuizAttempt, deleteTopicData } = useAppData();
-  const [form, setForm] = useState({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
-  const [resultMessage, setResultMessage] = useState("");
+  const { state, loading, error, deleteTopicData, uploadTopicFiles } = useAppData();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const moduleNames = state ? state.profile.modules : [];
@@ -38,23 +34,23 @@ export default function TopicDetail() {
 
   const masteryTrend = useMemo(() => {
     if (!topic) return [];
+    if (!attempts.length) {
+      return [
+        {
+          date: new Date(topic.lastInteractionAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+          mastery: 0,
+        },
+      ];
+    }
     const historyPoints = topic.history.map((h) => ({
       date: new Date(h.at).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
       mastery: toPct(h.newMastery),
     }));
-    if (!historyPoints.length) {
-      return [
-        {
-          date: new Date(topic.lastInteractionAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-          mastery: toPct(topic.estimatedMasteryNow ?? topic.mastery),
-        },
-      ];
-    }
     return historyPoints;
-  }, [topic]);
+  }, [topic, attempts.length]);
 
   const weaknesses = useMemo(() => {
-    if (!topic) return [];
+    if (!topic || !attempts.length) return ["No quiz attempts yet for this topic."];
     const recentAttempts = attempts.slice(-5);
     const lowConfidence = recentAttempts.filter((a) => a.confidence <= 2).length;
     const dropCount = recentAttempts.filter((a) => a.postScore < a.preScore).length;
@@ -82,33 +78,19 @@ export default function TopicDetail() {
       });
   }, [state, moduleName, topicName]);
 
-  const handleQuizSubmit = async () => {
-    if (!moduleName || !topicName) return;
-    const pre = Number(form.preScore);
-    const post = Number(form.postScore);
-    const confidence = Number(form.confidence);
-    if (Number.isNaN(pre) || Number.isNaN(post)) return;
-
-    const result = await submitQuizAttempt({
-      moduleName,
-      topicName,
-      preScore: pre,
-      postScore: post,
-      confidence,
-      aiUsed: form.aiUsed,
-    });
-
-    setResultMessage(
-      `Mastery updated ${result.oldMastery.toFixed(2)} -> ${result.newMastery.toFixed(2)} (gain ${result.gain.toFixed(2)}, decay ${result.decay.toFixed(2)})`,
-    );
-    setForm({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
-  };
-
   const handleDeleteTopic = async () => {
     if (!moduleName || !topicName) return;
     if (!window.confirm(`Delete topic "${topicName}" from ${moduleName}? This will remove related quiz/study/tab records.`)) return;
     await deleteTopicData({ moduleName, topicName });
     navigate(`/dashboard/modules/${toSlug(moduleName)}`);
+  };
+
+  const handleUploadChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    if (!moduleName || !topicName) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    await uploadTopicFiles({ moduleName, topicName, files });
+    e.target.value = "";
   };
 
   if (loading && !state) {
@@ -132,9 +114,9 @@ export default function TopicDetail() {
     );
   }
 
-  const masteryNow = topic.estimatedMasteryNow ?? topic.mastery;
+  const masteryNow = attempts.length ? (topic.estimatedMasteryNow ?? topic.mastery) : 0;
   const masteryPct = toPct(masteryNow);
-  const retentionDecay = Math.max(0, Math.round((topic.mastery - masteryNow) * 10));
+  const retentionDecay = attempts.length ? Math.max(0, Math.round((topic.mastery - masteryNow) * 10)) : 0;
   const risk = retentionDecay > 30 ? "high" : retentionDecay > 12 ? "medium" : "low";
 
   return (
@@ -168,29 +150,6 @@ export default function TopicDetail() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            <div className="md:col-span-1">
-              <Label>Pre-Quiz</Label>
-              <Input type="number" min="0" max="100" value={form.preScore} onChange={(e) => setForm((x) => ({ ...x, preScore: e.target.value }))} />
-            </div>
-            <div className="md:col-span-1">
-              <Label>Post-Quiz</Label>
-              <Input type="number" min="0" max="100" value={form.postScore} onChange={(e) => setForm((x) => ({ ...x, postScore: e.target.value }))} />
-            </div>
-            <div className="md:col-span-1">
-              <Label>Confidence (1-5)</Label>
-              <Input type="number" min="1" max="5" value={form.confidence} onChange={(e) => setForm((x) => ({ ...x, confidence: e.target.value }))} />
-            </div>
-            <label className="md:col-span-1 text-sm flex items-center gap-2">
-              <input type="checkbox" checked={form.aiUsed} onChange={(e) => setForm((x) => ({ ...x, aiUsed: e.target.checked }))} />
-              Used AI help
-            </label>
-            <Button className="md:col-span-1" onClick={handleQuizSubmit}>Submit Quiz</Button>
-          </div>
-          {resultMessage && <p className="text-sm text-primary mt-3">{resultMessage}</p>}
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="flex items-center gap-2 mb-4">
@@ -299,7 +258,7 @@ export default function TopicDetail() {
         </div>
 
         <div className="flex justify-end gap-3">
-          <input ref={fileInputRef} type="file" multiple className="hidden" />
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => void handleUploadChange(e)} />
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <Upload className="w-4 h-4 mr-2" />
             Upload Documents
@@ -308,6 +267,24 @@ export default function TopicDetail() {
             <Trash2 className="w-4 h-4 mr-2" />
             Delete Topic
           </Button>
+        </div>
+
+        <div className="bg-card border border-border rounded-lg p-5">
+          <h3 className="font-medium text-foreground text-lg mb-3">Uploaded Documents</h3>
+          <div className="space-y-2">
+            {!topic.documents?.length && <div className="text-sm text-muted-foreground">No uploaded documents yet.</div>}
+            {(topic.documents || []).map((doc) => (
+              <a
+                key={doc.id}
+                href={doc.path}
+                target="_blank"
+                rel="noreferrer"
+                className="block p-3 border border-border rounded-lg text-sm text-foreground hover:bg-muted/40 transition-colors"
+              >
+                {doc.name}
+              </a>
+            ))}
+          </div>
         </div>
       </div>
     </div>

@@ -66,8 +66,7 @@ export default function Dashboard() {
   });
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
-  const currentHour = new Date().getHours();
-  const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
+  const greeting = "Welcome!";
 
   const moduleValues = state ? Object.values(state.modules) : [];
   const burnoutRisk = Math.round(avg(moduleValues.map((x) => x.burnoutRisk || 0)));
@@ -187,7 +186,7 @@ export default function Dashboard() {
     <div className="min-h-screen">
       <div className="border-b border-border bg-card">
         <div className="max-w-6xl mx-auto px-6 py-5">
-          <h1 className="text-2xl font-medium text-foreground">{greeting}.</h1>
+          <h1 className="text-2xl font-medium text-foreground">{greeting}</h1>
           <p className="text-muted-foreground mt-0.5">Here&apos;s your learning overview</p>
         </div>
       </div>
@@ -221,9 +220,11 @@ export default function Dashboard() {
                     className={`${burnoutColors.strokeColor} transition-all`}
                   />
                 </svg>
-                <div className="absolute inset-0 flex items-center justify-center flex-col">
-                  <div className={`text-3xl font-medium ${burnoutColors.color}`}>{burnoutRisk}%</div>
-                  <div className="text-xs text-muted-foreground">{burnoutColors.label}</div>
+                <div className="absolute inset-0 grid place-items-center">
+                  <div className="text-center leading-none">
+                    <div className={`text-3xl font-medium ${burnoutColors.color}`}>{burnoutRisk}%</div>
+                    <div className="text-xs text-muted-foreground mt-1">{burnoutColors.label}</div>
+                  </div>
                 </div>
               </div>
             </div>

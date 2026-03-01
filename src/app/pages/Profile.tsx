@@ -23,6 +23,8 @@ export default function Profile() {
     if (!state) return;
     setProfileData((prev) => ({
       ...prev,
+      name: state.profile.fullName || "",
+      email: state.profile.email || "",
       school: state.profile.university,
       course: state.profile.courseOfStudy,
       year: state.profile.yearOfStudy,
@@ -65,6 +67,8 @@ export default function Profile() {
       .filter(Boolean);
 
     await saveProfileData({
+      fullName: profileData.name,
+      email: profileData.email,
       university: profileData.school,
       yearOfStudy: profileData.year,
       courseOfStudy: profileData.course,

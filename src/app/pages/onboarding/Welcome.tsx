@@ -8,6 +8,7 @@ import { Label } from "../../components/ui/label";
 export default function OnboardingWelcome() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
+    fullName: "",
     email: "",
     password: "",
     university: "",
@@ -47,6 +48,16 @@ export default function OnboardingWelcome() {
 
       {/* Form */}
       <div className="bg-card border border-border rounded-lg p-8 max-w-md mx-auto space-y-6">
+        <div className="space-y-2">
+          <Label htmlFor="fullName">Full Name</Label>
+          <Input
+            id="fullName"
+            placeholder="your full name"
+            value={formData.fullName}
+            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+            className="bg-input-background"
+          />
+        </div>
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input
