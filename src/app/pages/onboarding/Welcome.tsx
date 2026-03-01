@@ -1,0 +1,114 @@
+import { useState } from "react";
+import { useNavigate } from "react-router";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Brain } from "lucide-react";
+
+export default function OnboardingWelcome() {
+  const navigate = useNavigate();
+  const [formData, setFormData] = useState({
+    email: "",
+    password: "",
+    university: "",
+    course: "",
+    year: "",
+  });
+
+  const handleContinue = () => {
+    sessionStorage.setItem("onboarding_welcome", JSON.stringify(formData));
+    navigate("/onboarding/permissions");
+  };
+
+  return (
+    <div className="space-y-10">
+      {/* Header */}
+      <div className="text-center space-y-8 py-8">
+        <div className="flex justify-center">
+          <div className="w-16 h-16 rounded-xl bg-primary/10 flex items-center justify-center">
+            <Brain className="w-10 h-10 text-primary" />
+          </div>
+        </div>
+        
+        <div className="space-y-4">
+          <h1 className="text-5xl font-medium text-foreground">
+            Understand How You Learn.
+          </h1>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            AI-powered analytics that model your evolving learning state to help you study smarter.
+          </p>
+        </div>
+      </div>
+
+      {/* Form */}
+      <div className="bg-card border border-border rounded-lg p-8 max-w-md mx-auto space-y-6">
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            placeholder="you@university.edu"
+            value={formData.email}
+            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            className="bg-input-background"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="password">Password</Label>
+          <Input
+            id="password"
+            type="password"
+            placeholder="••••••••"
+            value={formData.password}
+            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            className="bg-input-background"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="university">School</Label>
+          <Input
+            id="university"
+            placeholder="e.g., National University of Singapore"
+            value={formData.university}
+            onChange={(e) => setFormData({ ...formData, university: e.target.value })}
+            className="bg-input-background"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="course">Course</Label>
+            <Input
+              id="course"
+              placeholder="e.g., Economics"
+              value={formData.course}
+              onChange={(e) => setFormData({ ...formData, course: e.target.value })}
+              className="bg-input-background"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="year">Year</Label>
+            <Input
+              id="year"
+              placeholder="e.g., 2"
+              value={formData.year}
+              onChange={(e) => setFormData({ ...formData, year: e.target.value })}
+              className="bg-input-background"
+            />
+          </div>
+        </div>
+
+        <Button
+          onClick={handleContinue}
+          disabled={!formData.university || !formData.course || !formData.year}
+          className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
+        >
+          Create My Learning System
+        </Button>
+      </div>
+    </div>
+  );
+}

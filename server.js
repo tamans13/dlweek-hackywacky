@@ -1,7 +1,11 @@
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const { URL } = require('url');
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { URL } from 'url';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function loadDotEnv() {
   const envPath = path.join(__dirname, '.env');
@@ -21,12 +25,14 @@ function loadDotEnv() {
 loadDotEnv();
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '127.0.0.1';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'app-data.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const DIST_DIR = path.join(__dirname, 'dist');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -70,6 +76,10 @@ function loadData() {
 function saveData(data) {
   data.updatedAt = nowIso();
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function staticDir() {
+  return fs.existsSync(DIST_DIR) ? DIST_DIR : PUBLIC_DIR;
 }
 
 function daysBetween(isoA, isoB) {
@@ -342,13 +352,36 @@ async function apiHandler(req, res, pathname) {
 
   if (req.method === 'POST' && pathname === '/api/profile') {
     const body = await parseBody(req);
+    const normalizedModules = Array.isArray(body.modules)
+      ? Array.from(
+          new Set(
+            body.modules
+              .map((x) => String(x || '').trim())
+              .filter(Boolean),
+          ),
+        )
+      : [];
+
     data.profile = {
       university: body.university || '',
       yearOfStudy: body.yearOfStudy || '',
       courseOfStudy: body.courseOfStudy || '',
-      modules: Array.isArray(body.modules) ? body.modules : [],
+      modules: normalizedModules,
     };
-    for (const moduleName of data.profile.modules) moduleState(data, moduleName);
+
+    // Keep backend data consistent with current profile module list.
+    const allowed = new Set(normalizedModules);
+    data.modules = Object.fromEntries(
+      Object.entries(data.modules).filter(([moduleName]) => allowed.has(moduleName)),
+    );
+    data.examPlans = Object.fromEntries(
+      Object.entries(data.examPlans).filter(([moduleName]) => allowed.has(moduleName)),
+    );
+    data.studySessions = data.studySessions.filter((x) => allowed.has(x.moduleName));
+    data.tabEvents = data.tabEvents.filter((x) => allowed.has(x.moduleName));
+    data.quizAttempts = data.quizAttempts.filter((x) => allowed.has(x.moduleName));
+
+    for (const moduleName of normalizedModules) moduleState(data, moduleName);
     saveData(data);
     return send(res, 200, { ok: true, profile: data.profile });
   }
@@ -398,6 +431,17 @@ async function apiHandler(req, res, pathname) {
     recomputeModuleScores(data, body.moduleName);
     saveData(data);
     return send(res, 200, { ok: true, event });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/topic/add') {
+    const body = await parseBody(req);
+    if (!body.moduleName || !body.topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+    const mod = moduleState(data, body.moduleName);
+    const topic = topicState(mod, body.topicName);
+    topic.lastInteractionAt = nowIso();
+    recomputeModuleScores(data, body.moduleName);
+    saveData(data);
+    return send(res, 200, { ok: true, topic });
   }
 
   if (req.method === 'POST' && pathname === '/api/quiz/submit') {
@@ -485,6 +529,17 @@ async function apiHandler(req, res, pathname) {
     return send(res, 200, { ok: true, readiness: readinessScore(body.moduleName, data) });
   }
 
+  if (req.method === 'GET' && pathname === '/api/readiness') {
+    for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    saveData(data);
+    const readiness = Object.keys(data.modules).map((moduleName) => ({
+      moduleName,
+      ...readinessScore(moduleName, data),
+      examPlan: data.examPlans[moduleName] || null,
+    }));
+    return send(res, 200, { readiness });
+  }
+
   if (req.method === 'POST' && pathname === '/api/insights/generate') {
     const body = await parseBody(req);
     if (!body.moduleName) return send(res, 400, { error: 'moduleName required' });
@@ -498,9 +553,10 @@ async function apiHandler(req, res, pathname) {
 }
 
 function staticHandler(req, res, pathname) {
-  const filePath = pathname === '/' ? path.join(PUBLIC_DIR, 'index.html') : path.join(PUBLIC_DIR, pathname);
+  const root = staticDir();
+  const filePath = pathname === '/' ? path.join(root, 'index.html') : path.join(root, pathname);
   const normalized = path.normalize(filePath);
-  if (!normalized.startsWith(PUBLIC_DIR)) {
+  if (!normalized.startsWith(root)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -508,6 +564,19 @@ function staticHandler(req, res, pathname) {
 
   fs.readFile(normalized, (err, content) => {
     if (err) {
+      if (!path.extname(pathname)) {
+        const indexPath = path.join(root, 'index.html');
+        fs.readFile(indexPath, (indexErr, indexContent) => {
+          if (indexErr) {
+            res.writeHead(404);
+            res.end('Not found');
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(indexContent);
+        });
+        return;
+      }
       res.writeHead(404);
       res.end('Not found');
       return;
@@ -534,7 +603,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   ensureDataFile();
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Server running at http://${HOST}:${PORT}`);
 });

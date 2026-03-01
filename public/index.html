@@ -3,102 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LearnPulse AI</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>Brainosaur UI Build Required</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: #eef4f7;
+        color: #11243a;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+      }
+      .card {
+        width: min(760px, 92vw);
+        background: #fff;
+        border: 1px solid #dbe8f2;
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+      }
+      h1 { margin: 0 0 .5rem 0; }
+      code { background: #f3f7fb; padding: .1rem .35rem; border-radius: 6px; }
+    </style>
   </head>
   <body>
-    <header class="hero">
-      <div>
-        <h1>LearnPulse AI</h1>
-        <p>Model learning state, detect drift, and get actionable study plans.</p>
-      </div>
-      <div id="aiBadge" class="badge">AI: checking...</div>
-    </header>
-
-    <main class="grid">
-      <section class="card">
-        <h2>1) Student Setup</h2>
-        <form id="profileForm" class="stack">
-          <input name="university" placeholder="University" required />
-          <input name="yearOfStudy" placeholder="Year of Study" required />
-          <input name="courseOfStudy" placeholder="Course of Study" required />
-          <textarea name="modules" placeholder="Modules (comma separated)" required></textarea>
-          <button type="submit">Save Profile</button>
-        </form>
-      </section>
-
-      <section class="card">
-        <h2>2) Study Session + Focus Events</h2>
-        <form id="sessionForm" class="stack">
-          <input name="moduleName" placeholder="Module Name" required />
-          <input name="topicName" placeholder="Topic Name" required />
-          <div class="row">
-            <button type="button" id="startSession">Start Study Session</button>
-            <button type="button" id="stopSession" class="secondary">Stop Session</button>
-          </div>
-        </form>
-        <hr />
-        <form id="eventForm" class="stack">
-          <input name="moduleName" placeholder="Module Name" required />
-          <input name="topicName" placeholder="Topic Name" required />
-          <input name="url" placeholder="Visited URL" required />
-          <button type="submit">Log Tab/Website Event</button>
-        </form>
-        <small>Auto tags: learning/help/distraction/neutral. For YouTube and social sites, app asks if usage is educational.</small>
-      </section>
-
-      <section class="card">
-        <h2>3) Quiz Submission</h2>
-        <form id="quizForm" class="stack">
-          <input name="moduleName" placeholder="Module Name" required />
-          <input name="topicName" placeholder="Topic Name" required />
-          <div class="row">
-            <input type="number" min="0" max="100" name="preScore" placeholder="Pre-Quiz Score" required />
-            <input type="number" min="0" max="100" name="postScore" placeholder="Post-Quiz Score" required />
-          </div>
-          <div class="row">
-            <label>Confidence (1-5)</label>
-            <input type="number" min="1" max="5" name="confidence" value="3" required />
-          </div>
-          <label class="check"><input type="checkbox" name="aiUsed" /> Used AI help</label>
-          <button type="submit">Submit Quiz</button>
-        </form>
-        <div id="quizResult" class="hint"></div>
-      </section>
-
-      <section class="card">
-        <h2>4) Exam Readiness</h2>
-        <form id="examForm" class="stack">
-          <input name="moduleName" placeholder="Module Name" required />
-          <input type="date" name="examDate" required />
-          <div class="row">
-            <input type="number" name="totalTopics" placeholder="Total Topics" required />
-            <input type="number" name="topicsCovered" placeholder="Topics Covered" required />
-          </div>
-          <button type="submit">Update Readiness</button>
-        </form>
-        <div id="readinessResult" class="hint"></div>
-      </section>
-
-      <section class="card wide">
-        <h2>5) Module Insights & Action Plan</h2>
-        <form id="insightForm" class="row">
-          <input name="moduleName" placeholder="Module Name" required />
-          <button type="submit">Generate Insights</button>
-        </form>
-        <div id="insights"></div>
-      </section>
-
-      <section class="card wide">
-        <h2>Live State Snapshot</h2>
-        <div class="row">
-          <button id="refresh">Refresh State</button>
-          <button id="toggleState" type="button" class="secondary">Show Debug JSON</button>
-        </div>
-        <pre id="stateView" hidden></pre>
-      </section>
-    </main>
-
-    <script src="/app.js"></script>
+    <div class="card">
+      <h1>New UI Source Integrated</h1>
+      <p>
+        The Figma-exported React UI has been integrated in <code>src/</code>.
+        Run <code>npm run dev:ui</code> for the new frontend and <code>npm run dev:api</code> for backend APIs.
+      </p>
+      <p>
+        For single-server static hosting, build first with <code>npm run build:ui</code>, then run <code>npm run dev:api</code>.
+      </p>
+    </div>
   </body>
 </html>
