@@ -82,6 +82,7 @@ export interface BackendState {
   createdAt: string;
   updatedAt: string;
   aiEnabled: boolean;
+  supabaseEnabled?: boolean;
 }
 
 export interface ReadinessItem {
@@ -108,19 +109,176 @@ export interface OnboardingPersonaAnalysis {
   studyTechniques: OnboardingPersonaTechnique[];
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export interface AuthSession {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  tokenType: string;
+  createdAt: number;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+}
+
+export interface TopicDocument {
+  id: string;
+  moduleName: string;
+  topicName: string;
+  fileName: string;
+  mimeType: string;
+  uploadedAt: string;
+  textExtracted: boolean;
+}
+
+export interface GeneratedQuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  explanation: string;
+}
+
+export interface GeneratedQuizAttemptSummary {
+  id: string;
+  quizId: string;
+  score: number;
+  total: number;
+  submittedAt: string;
+}
+
+export interface GeneratedQuiz {
+  id: string;
+  moduleName: string;
+  topicName: string;
+  title: string;
+  questions: GeneratedQuizQuestion[];
+  createdAt: string;
+  sourceDocumentIds: string[];
+  attempts: GeneratedQuizAttemptSummary[];
+  attemptCount: number;
+  lastAttempt: GeneratedQuizAttemptSummary | null;
+}
+
+export interface GeneratedQuizReviewItem {
+  questionId: string;
+  selectedIndex: number | null;
+  correctIndex: number;
+  isCorrect: boolean;
+  explanation: string;
+}
+
+const SESSION_STORAGE_KEY = "brainosaur_auth_session";
+
+function isBrowser() {
+  return typeof window !== "undefined";
+}
+
+export function getStoredAuthSession(): AuthSession | null {
+  if (!isBrowser()) return null;
+  const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as AuthSession;
+    if (!parsed || !parsed.accessToken) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveAuthSession(session: AuthSession) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+export function clearAuthSession() {
+  if (!isBrowser()) return;
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+export function hasAuthSession() {
+  const session = getStoredAuthSession();
+  return Boolean(session?.accessToken);
+}
+
+interface RequestOptions {
+  auth?: boolean;
+}
+
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  const useAuth = options?.auth !== false;
+  const headers = new Headers(init?.headers || {});
+
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (useAuth) {
+    const session = getStoredAuthSession();
+    if (session?.accessToken) {
+      headers.set("Authorization", `Bearer ${session.accessToken}`);
+    }
+  }
+
   const res = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
     ...init,
+    headers,
   });
-  const data = await res.json();
+
+  const text = await res.text();
+  let data: any = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
+  }
+
   if (!res.ok) {
+    if (res.status === 401 && useAuth) {
+      clearAuthSession();
+    }
     throw new Error(data?.error || `Request failed (${res.status})`);
   }
+
   return data as T;
+}
+
+export async function loginOrSignup(email: string, password: string) {
+  const result = await request<{
+    ok: true;
+    user: AuthUser;
+    session: {
+      accessToken: string;
+      refreshToken: string;
+      expiresIn: number;
+      tokenType: string;
+    };
+    supabaseEnabled: boolean;
+  }>(
+    "/api/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    },
+    { auth: false },
+  );
+
+  saveAuthSession({
+    accessToken: result.session.accessToken,
+    refreshToken: result.session.refreshToken,
+    expiresIn: result.session.expiresIn,
+    tokenType: result.session.tokenType,
+    createdAt: Date.now(),
+  });
+
+  return result;
+}
+
+export function fetchSessionUser() {
+  return request<{ ok: true; user: AuthUser; supabaseEnabled: boolean }>("/api/auth/session");
 }
 
 export function classifyUrl(url: string) {
@@ -183,6 +341,66 @@ export function deleteTopic(payload: { moduleName: string; topicName: string }) 
   });
 }
 
+export function uploadTopicFiles(payload: {
+  moduleName: string;
+  topicName: string;
+  files: Array<{
+    name: string;
+    type: string;
+    dataBase64: string;
+  }>;
+}) {
+  return request<{
+    ok: true;
+    uploaded: Array<{ id: string; fileName: string; mimeType: string; uploadedAt: string }>;
+    documents: TopicDocument[];
+  }>("/api/topic/files/upload", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchTopicFiles(moduleName: string, topicName: string) {
+  const query = new URLSearchParams({ moduleName, topicName }).toString();
+  return request<{ documents: TopicDocument[] }>(`/api/topic/files?${query}`);
+}
+
+export function generateTopicQuiz(payload: {
+  moduleName: string;
+  topicName: string;
+  questionCount?: number;
+}) {
+  return request<{
+    ok: true;
+    quiz: GeneratedQuiz;
+    generator: string;
+    sourceDocumentCount: number;
+    aiEnabled: boolean;
+  }>("/api/topic/quiz/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchTopicQuizzes(moduleName: string, topicName: string) {
+  const query = new URLSearchParams({ moduleName, topicName }).toString();
+  return request<{ quizzes: GeneratedQuiz[] }>(`/api/topic/quizzes?${query}`);
+}
+
+export function submitTopicQuiz(payload: {
+  quizId: string;
+  answers: number[];
+}) {
+  return request<{
+    ok: true;
+    attempt: GeneratedQuizAttemptSummary & { percent: number };
+    review: GeneratedQuizReviewItem[];
+  }>("/api/topic/quiz/submit", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function submitQuiz(payload: {
   moduleName: string;
   topicName: string;
@@ -238,8 +456,12 @@ export function generateOnboardingPersona(payload: {
   welcome: Record<string, unknown>;
   prefs: Record<string, unknown>;
 }) {
-  return request<{ ok: true; analysis: OnboardingPersonaAnalysis; aiEnabled: boolean }>("/api/onboarding/persona", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  return request<{ ok: true; analysis: OnboardingPersonaAnalysis; aiEnabled: boolean }>(
+    "/api/onboarding/persona",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false },
+  );
 }

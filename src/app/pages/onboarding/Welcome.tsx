@@ -20,6 +20,14 @@ export default function OnboardingWelcome() {
     navigate("/onboarding/permissions");
   };
 
+  const canContinue =
+    Boolean(formData.email.trim()) &&
+    Boolean(formData.password.trim()) &&
+    formData.password.trim().length >= 6 &&
+    Boolean(formData.university.trim()) &&
+    Boolean(formData.course.trim()) &&
+    Boolean(formData.year.trim());
+
   return (
     <div className="space-y-10">
       {/* Header */}
@@ -103,11 +111,14 @@ export default function OnboardingWelcome() {
         </div>
         <Button
           onClick={handleContinue}
-          disabled={!formData.university || !formData.course || !formData.year}
+          disabled={!canContinue}
           className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
         >
           Create My Learning System
         </Button>
+        <p className="text-xs text-muted-foreground">
+          Use the same email/password next time to access your saved modules, documents, and quiz history.
+        </p>
       </div>
     </div>
   );

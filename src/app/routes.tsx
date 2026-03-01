@@ -13,15 +13,28 @@ import OnboardingPreferences from "./pages/onboarding/Preferences";
 import OnboardingPermissions from "./pages/onboarding/Permissions";
 import OnboardingComplete from "./pages/onboarding/Complete";
 import { Navigate } from "react-router";
+import { hasAuthSession } from "./lib/api";
+
+function RootRedirect() {
+  return hasAuthSession() ? <Navigate to="/dashboard" replace /> : <Navigate to="/onboarding/welcome" replace />;
+}
+
+function OnboardingGate() {
+  return hasAuthSession() ? <Navigate to="/dashboard" replace /> : <OnboardingLayout />;
+}
+
+function DashboardGate() {
+  return hasAuthSession() ? <DashboardLayout /> : <Navigate to="/onboarding/welcome" replace />;
+}
 
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <Navigate to="/onboarding/welcome" replace />,
+    element: <RootRedirect />,
   },
   {
     path: "/onboarding",
-    Component: OnboardingLayout,
+    element: <OnboardingGate />,
     children: [
       { index: true, element: <Navigate to="/onboarding/welcome" replace /> },
       { path: "welcome", Component: OnboardingWelcome },
@@ -32,7 +45,7 @@ export const router = createBrowserRouter([
   },
   {
     path: "/dashboard",
-    Component: DashboardLayout,
+    element: <DashboardGate />,
     children: [
       { index: true, Component: Dashboard },
       { path: "modules", Component: Modules },

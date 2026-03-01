@@ -1,12 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
+  AuthUser,
   BackendState,
+  clearAuthSession,
   deleteTopic,
   fetchDueQuizzes,
   fetchReadiness,
+  fetchSessionUser,
   fetchState,
   generateInsights,
+  hasAuthSession,
   logTabEvent,
+  loginOrSignup,
   saveProfile,
   startStudySession,
   stopStudySession,
@@ -20,7 +25,11 @@ interface AppDataContextValue {
   error: string | null;
   dueQuizzes: Array<{ moduleName: string; topicName: string; type: string }>;
   readiness: Array<{ moduleName: string; score: number; reason: string; examPlan: any }>;
+  authenticated: boolean;
+  authUser: AuthUser | null;
   refresh: () => Promise<void>;
+  authenticate: (email: string, password: string) => Promise<void>;
+  logout: () => void;
   saveProfileData: (payload: {
     university: string;
     yearOfStudy: string;
@@ -68,16 +77,32 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [dueQuizzes, setDueQuizzes] = useState<Array<{ moduleName: string; topicName: string; type: string }>>([]);
   const [readiness, setReadiness] = useState<Array<{ moduleName: string; score: number; reason: string; examPlan: any }>>([]);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!hasAuthSession()) {
+      setState(null);
+      setDueQuizzes([]);
+      setReadiness([]);
+      setAuthUser(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const [nextState, due, ready] = await Promise.all([fetchState(), fetchDueQuizzes(), fetchReadiness()]);
+      const [session, nextState, due, ready] = await Promise.all([fetchSessionUser(), fetchState(), fetchDueQuizzes(), fetchReadiness()]);
+      setAuthUser(session.user);
       setState(nextState);
       setDueQuizzes(due.due);
       setReadiness(ready.readiness);
     } catch (err) {
+      setState(null);
+      setDueQuizzes([]);
+      setReadiness([]);
+      setAuthUser(null);
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
       setLoading(false);
@@ -87,6 +112,24 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const authenticate = useCallback(
+    async (email: string, password: string) => {
+      await loginOrSignup(email, password);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const logout = useCallback(() => {
+    clearAuthSession();
+    setState(null);
+    setDueQuizzes([]);
+    setReadiness([]);
+    setAuthUser(null);
+    setError(null);
+    setLoading(false);
+  }, []);
 
   const saveProfileData = useCallback(
     async (payload: { university: string; yearOfStudy: string; courseOfStudy: string; modules: string[] }) => {
@@ -167,7 +210,11 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       error,
       dueQuizzes,
       readiness,
+      authenticated: Boolean(authUser),
+      authUser,
       refresh,
+      authenticate,
+      logout,
       saveProfileData,
       startSession,
       stopSession,
@@ -183,7 +230,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       error,
       dueQuizzes,
       readiness,
+      authUser,
       refresh,
+      authenticate,
+      logout,
       saveProfileData,
       startSession,
       stopSession,

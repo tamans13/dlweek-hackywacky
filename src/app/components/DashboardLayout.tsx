@@ -6,11 +6,14 @@ import {
   Target, 
   Settings as SettingsIcon,
   Brain,
-  User
+  User,
+  LogOut,
 } from "lucide-react";
+import { useAppData } from "../state/AppDataContext";
 
 export default function DashboardLayout() {
   const location = useLocation();
+  const { authUser, logout } = useAppData();
 
   const isActive = (path: string) => {
     // For dashboard, only match exact path
@@ -66,6 +69,23 @@ export default function DashboardLayout() {
             );
           })}
         </nav>
+
+        <div className="p-3 border-t border-border space-y-2">
+          <div className="text-xs text-muted-foreground truncate px-2" title={authUser?.email || ""}>
+            {authUser?.email || "Signed in"}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              logout();
+              window.location.href = "/onboarding/welcome";
+            }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-foreground hover:bg-muted transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="text-sm">Log Out</span>
+          </button>
+        </div>
       </aside>
 
       {/* Main content */}
