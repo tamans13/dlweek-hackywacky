@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
-import { useParams, Link } from "react-router";
-import { ArrowLeft, Calendar, TrendingDown, AlertCircle, CheckCircle } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { useParams, Link, useNavigate } from "react-router";
+import { ArrowLeft, Calendar, TrendingDown, AlertCircle, CheckCircle, Upload, Trash2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
@@ -14,9 +14,11 @@ function toPct(value: number) {
 
 export default function TopicDetail() {
   const { moduleId, topicId } = useParams<{ moduleId: string; topicId: string }>();
-  const { state, loading, error, submitQuizAttempt } = useAppData();
+  const navigate = useNavigate();
+  const { state, loading, error, submitQuizAttempt, deleteTopicData } = useAppData();
   const [form, setForm] = useState({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
   const [resultMessage, setResultMessage] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const moduleNames = state ? state.profile.modules : [];
 
@@ -100,6 +102,13 @@ export default function TopicDetail() {
       `Mastery updated ${result.oldMastery.toFixed(2)} -> ${result.newMastery.toFixed(2)} (gain ${result.gain.toFixed(2)}, decay ${result.decay.toFixed(2)})`,
     );
     setForm({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
+  };
+
+  const handleDeleteTopic = async () => {
+    if (!moduleName || !topicName) return;
+    if (!window.confirm(`Delete topic "${topicName}" from ${moduleName}? This will remove related quiz/study/tab records.`)) return;
+    await deleteTopicData({ moduleName, topicName });
+    navigate(`/dashboard/modules/${toSlug(moduleName)}`);
   };
 
   if (loading && !state) {
@@ -287,6 +296,18 @@ export default function TopicDetail() {
               ))}
             </div>
           </div>
+        </div>
+
+        <div className="flex justify-end gap-3">
+          <input ref={fileInputRef} type="file" multiple className="hidden" />
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+            <Upload className="w-4 h-4 mr-2" />
+            Upload Documents
+          </Button>
+          <Button variant="destructive" onClick={handleDeleteTopic}>
+            <Trash2 className="w-4 h-4 mr-2" />
+            Delete Topic
+          </Button>
         </div>
       </div>
     </div>
