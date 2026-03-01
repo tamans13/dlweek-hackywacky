@@ -40,6 +40,7 @@ const DATA_FILE = path.join(DATA_DIR, 'app-data.json');
 const LOCAL_UPLOAD_DIR = path.join(DATA_DIR, 'topic-files');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DIST_DIR = path.join(__dirname, 'dist');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -47,6 +48,11 @@ const MIME_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 const TEXT_FILE_EXTENSIONS = new Set([
@@ -82,7 +88,30 @@ function nowIso() {
 }
 
 function randomId(prefix) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;}
+function ensureDataFile() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(DATA_FILE)) {
+    const seed = {
+      profile: {
+        fullName: '',
+        email: '',
+        university: '',
+        yearOfStudy: '',
+        courseOfStudy: '',
+        modules: [],
+      },
+      modules: {},
+      studySessions: [],
+      tabEvents: [],
+      quizAttempts: [],
+      examPlans: {},
+      onboardingPersona: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(seed, null, 2));
+  }
 }
 
 function clamp(n, min, max) {
@@ -440,7 +469,10 @@ async function loginOrSignupWithSupabase(email, password) {
   }
 
   const signupText = await signupRes.text();
-  throw new Error(`Sign-in failed: ${supabaseErrorText(signinRes.status, signinText)} | Sign-up failed: ${supabaseErrorText(signupRes.status, signupText)}`);
+  throw new Error(`Sign-in failed: ${supabaseErrorText(signinRes.status, signinText)} | Sign-up failed: ${supabaseErrorText(signupRes.status, signupText)}`);}
+function learningGain(preScore, postScore) {
+  const denom = Math.max(1, 100 - preScore);
+  return clamp((postScore - preScore) / denom, -1, 1);
 }
 
 function classifyUrl(url) {
@@ -473,8 +505,10 @@ function topicState(mod, topicName) {
       lastQuizAt: null,
       nextReviewAt: nowIso(),
       history: [],
+      documents: [],
     };
   }
+  if (!Array.isArray(mod.topics[topicName].documents)) mod.topics[topicName].documents = [];
   return mod.topics[topicName];
 }
 
@@ -519,7 +553,8 @@ function recomputeModuleScores(data, moduleName) {
   const now = nowIso();
 
   const moduleSessions = data.studySessions.filter((s) => s.moduleName === moduleName && s.endAt);
-  const recentAttempts = data.quizAttempts.filter((q) => q.moduleName === moduleName).slice(-12);
+  const moduleAttempts = data.quizAttempts.filter((q) => q.moduleName === moduleName);
+  const recentAttempts = moduleAttempts.slice(-12);
   const tabEvents = data.tabEvents.filter((e) => e.moduleName === moduleName).slice(-500);
 
   let totalSessionMinutes = 0;
@@ -548,7 +583,13 @@ function recomputeModuleScores(data, moduleName) {
   const accuracyPart = meanAccuracy / 100;
   mod.focusEfficiency = clamp((focusPart * 0.6 + accuracyPart * 0.4) * 100, 0, 100);
 
+  const attemptedTopics = new Set(moduleAttempts.map((x) => x.topicName));
   for (const topic of Object.values(mod.topics)) {
+    if (!attemptedTopics.has(topic.topicName)) {
+      topic.estimatedMasteryNow = 0;
+      topic.nextReviewAt = new Date(new Date(topic.lastInteractionAt).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+      continue;
+    }
     const decay = retentionDecay(topic, now);
     topic.estimatedMasteryNow = clamp(topic.mastery - decay, 1, 10);
     topic.nextReviewAt = new Date(new Date(topic.lastInteractionAt).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
@@ -558,26 +599,37 @@ function recomputeModuleScores(data, moduleName) {
 }
 
 function readinessScore(moduleName, data) {
-  const mod = moduleState(data, moduleName);
   const exam = data.examPlans[moduleName];
-  if (!exam || !exam.examDate) return { score: 0, reason: 'Add exam date and topic coverage data to estimate readiness.' };
+  if (!exam || !exam.examDate) return { score: 0, reason: 'No data yet' };
 
   const testedNames = Array.isArray(exam.topicsTested) ? exam.topicsTested : [];
-  const topics = testedNames
-    .map((name) => mod.topics[name])
-    .filter(Boolean);
-  if (!topics.length) return { score: 0, reason: 'No topics tested selected yet.' };
+  if (!testedNames.length) return { score: 0, reason: 'No data yet' };
 
-  const masteryMean = topics.reduce((a, t) => a + (t.estimatedMasteryNow || t.mastery), 0) / topics.length;
+  const testedSet = new Set(testedNames);
+  const testedAttempts = data.quizAttempts.filter((q) => q.moduleName === moduleName && testedSet.has(q.topicName));
+  if (!testedAttempts.length) return { score: 0, reason: 'No data yet' };
+
+  const postScoresByTopic = new Map();
+  for (const topicName of testedNames) postScoresByTopic.set(topicName, []);
+  for (const attempt of testedAttempts) {
+    if (!postScoresByTopic.has(attempt.topicName)) continue;
+    postScoresByTopic.get(attempt.topicName).push(clamp(Number(attempt.postScore || 0), 0, 100));
+  }
+  const topicAccuracies = testedNames.map((topicName) => {
+    const arr = postScoresByTopic.get(topicName) || [];
+    if (!arr.length) return 0;
+    return arr.reduce((sum, score) => sum + score, 0) / arr.length;
+  });
+  const masteryMean = topicAccuracies.reduce((sum, score) => sum + score, 0) / Math.max(1, topicAccuracies.length) / 10;
   const daysLeft = Math.max(0, daysBetween(nowIso(), exam.examDate));
-  const coverageRatio = clamp((exam.topicsCovered || 0) / Math.max(1, exam.totalTopics || topics.length), 0, 1);
+  const coverageRatio = clamp((exam.topicsCovered || 0) / Math.max(1, testedNames.length), 0, 1);
 
   const timePressure = daysLeft < 7 ? 0.65 : daysLeft < 14 ? 0.8 : 1;
   const score = clamp((masteryMean / 10) * 55 + coverageRatio * 35 + timePressure * 10, 0, 100);
 
   return {
     score: Math.round(score),
-    reason: `Mastery ${masteryMean.toFixed(1)}/10, coverage ${(coverageRatio * 100).toFixed(0)}%, ${Math.ceil(daysLeft)} days to exam.`,
+    reason: `Quiz-backed mastery ${masteryMean.toFixed(1)}/10, coverage ${(coverageRatio * 100).toFixed(0)}%, ${Math.ceil(daysLeft)} days to exam.`,
   };
 }
 
@@ -1767,6 +1819,93 @@ async function ensureAuthenticatedUser(req, res) {
   }
   return user;
 }
+function safePathPart(value) {
+  const text = String(value || '').trim();
+  const cleaned = text.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  return cleaned || 'unknown';
+}
+
+function parseMultipartContentDisposition(headerLine) {
+  const nameMatch = /name="([^"]+)"/i.exec(headerLine);
+  const fileMatch = /filename="([^"]*)"/i.exec(headerLine);
+  return {
+    fieldName: nameMatch ? nameMatch[1] : '',
+    filename: fileMatch ? fileMatch[1] : '',
+  };
+}
+
+function parseMultipartBody(buffer, boundary) {
+  const raw = buffer.toString('latin1');
+  const delim = `--${boundary}`;
+  const parts = raw.split(delim).slice(1, -1);
+  const fields = {};
+  const files = [];
+
+  for (const partRaw of parts) {
+    let part = partRaw;
+    if (part.startsWith('\r\n')) part = part.slice(2);
+    if (part.endsWith('\r\n')) part = part.slice(0, -2);
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd === -1) continue;
+
+    const headersText = part.slice(0, headerEnd);
+    const bodyText = part.slice(headerEnd + 4);
+    const headerLines = headersText.split('\r\n');
+    const disposition = headerLines.find((line) => line.toLowerCase().startsWith('content-disposition:'));
+    if (!disposition) continue;
+    const { fieldName, filename } = parseMultipartContentDisposition(disposition);
+    if (!fieldName) continue;
+
+    const contentTypeLine = headerLines.find((line) => line.toLowerCase().startsWith('content-type:'));
+    const contentType = contentTypeLine ? contentTypeLine.split(':')[1].trim() : 'application/octet-stream';
+    const valueBuffer = Buffer.from(bodyText, 'latin1');
+
+    if (filename) {
+      files.push({
+        fieldName,
+        filename: path.basename(filename),
+        contentType,
+        buffer: valueBuffer,
+      });
+    } else {
+      fields[fieldName] = valueBuffer.toString('utf8');
+    }
+  }
+
+  return { fields, files };
+}
+
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = String(req.headers['content-type'] || '');
+    const boundaryMatch = /boundary=([^;]+)/i.exec(contentType);
+    if (!boundaryMatch) {
+      reject(new Error('Missing multipart boundary'));
+      return;
+    }
+    const boundary = boundaryMatch[1];
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > 25_000_000) {
+        reject(new Error('Upload too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    req.on('end', () => {
+      try {
+        const full = Buffer.concat(chunks);
+        resolve(parseMultipartBody(full, boundary));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
 
 async function apiHandler(req, res, parsedUrl) {
   const pathname = parsedUrl.pathname;
@@ -1855,6 +1994,8 @@ async function apiHandler(req, res, parsedUrl) {
     const previousModules = new Set(Object.keys(data.modules));
 
     data.profile = {
+      fullName: body.fullName !== undefined ? String(body.fullName || '') : String(data.profile.fullName || ''),
+      email: body.email !== undefined ? String(body.email || '') : String(data.profile.email || ''),
       university: body.university || '',
       yearOfStudy: body.yearOfStudy || '',
       courseOfStudy: body.courseOfStudy || '',
@@ -2169,28 +2310,36 @@ async function apiHandler(req, res, parsedUrl) {
 
   if (req.method === 'POST' && pathname === '/api/quiz/submit') {
     const body = await parseBody(req);
-    const { moduleName, topicName, preScore, postScore, confidence, aiUsed } = body;
+    const { moduleName, topicName, preScore, postScore } = body;
     if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+
+    const pre = Number(preScore);
+    const post = Number(postScore);
+    if (!Number.isFinite(pre) || !Number.isFinite(post)) {
+      return send(res, 400, { error: 'preScore and postScore are required numbers' });
+    }
+    const boundedPre = clamp(pre, 0, 100);
+    const boundedPost = clamp(post, 0, 100);
+    const boundedConfidence = 3;
+    const aiUsed = false;
 
     const mod = moduleState(data, moduleName);
     const topic = topicState(mod, topicName);
     const now = nowIso();
     const decay = retentionDecay(topic, now);
-    const gain = learningGain(Number(preScore || 0), Number(postScore || 0));
-    const confidenceAdj = Number(confidence || 3) >= 4 ? 0.2 : 0;
-    const aiAdj = aiUsed ? -0.1 : 0.1;
+    const gain = learningGain(boundedPre, boundedPost);
 
     const oldMastery = topic.mastery;
-    topic.mastery = clamp(oldMastery + gain * 2.5 + confidenceAdj + aiAdj - decay, 1, 10);
+    topic.mastery = clamp(oldMastery + gain * 2.5 - decay, 1, 10);
     topic.lastInteractionAt = now;
     topic.lastQuizAt = now;
     topic.history.push({
       at: now,
       oldMastery,
       newMastery: topic.mastery,
-      preScore,
-      postScore,
-      confidence,
+      preScore: boundedPre,
+      postScore: boundedPost,
+      confidence: boundedConfidence,
       aiUsed,
       decay,
       gain,
@@ -2201,9 +2350,9 @@ async function apiHandler(req, res, parsedUrl) {
       id: randomId('quiz'),
       moduleName,
       topicName,
-      preScore: Number(preScore || 0),
-      postScore: Number(postScore || 0),
-      confidence: Number(confidence || 3),
+      preScore: boundedPre,
+      postScore: boundedPost,
+      confidence: boundedConfidence,
       aiUsed: Boolean(aiUsed),
       submittedAt: now,
       difficultySuggestion: oldMastery < 4 ? 'easy' : oldMastery < 7 ? 'medium' : 'hard',
@@ -2247,8 +2396,8 @@ async function apiHandler(req, res, parsedUrl) {
       : [];
     data.examPlans[body.moduleName] = {
       examDate: body.examDate,
-      totalTopics: topicsTested.length || Number(body.totalTopics || 0),
-      topicsCovered: Number(body.topicsCovered || 0),
+      totalTopics: topicsTested.length,
+      topicsCovered: topicsTested.length,
       topicsTested,
       updatedAt: nowIso(),
     };
@@ -2259,6 +2408,43 @@ async function apiHandler(req, res, parsedUrl) {
     );
     await saveDataForUser(user.id, data);
     return send(res, 200, { ok: true, readiness: readinessScore(body.moduleName, data) });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/topic/upload') {
+    const multipart = await parseMultipart(req);
+    const moduleName = String(multipart.fields.moduleName || '').trim();
+    const topicName = String(multipart.fields.topicName || '').trim();
+    if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+    const mod = moduleState(data, moduleName);
+    const topic = topicState(mod, topicName);
+    const uploadFiles = multipart.files.filter((f) => f.fieldName === 'files' && f.filename);
+    if (!uploadFiles.length) return send(res, 400, { error: 'No files received' });
+
+    const moduleDir = safePathPart(moduleName);
+    const topicDir = safePathPart(topicName);
+    const targetDir = path.join(UPLOADS_DIR, moduleDir, topicDir);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const uploadedAt = nowIso();
+    const docs = uploadFiles.map((file, idx) => {
+      const uniqueId = `doc_${Date.now()}_${idx}`;
+      const safeName = file.filename.replace(/[^\w.\-() ]/g, '_');
+      const storedName = `${uniqueId}_${safeName}`;
+      const diskPath = path.join(targetDir, storedName);
+      fs.writeFileSync(diskPath, file.buffer);
+      return {
+        id: uniqueId,
+        name: file.filename,
+        path: `/uploads/${moduleDir}/${topicDir}/${storedName}`,
+        uploadedAt,
+      };
+    });
+
+    topic.documents = Array.isArray(topic.documents) ? topic.documents.concat(docs) : docs;
+    topic.lastInteractionAt = uploadedAt;
+    recomputeModuleScores(data, moduleName);
+    saveData(data);
+    return send(res, 200, { ok: true, documents: docs });
   }
 
   if (req.method === 'GET' && pathname === '/api/readiness') {
@@ -2284,6 +2470,27 @@ async function apiHandler(req, res, parsedUrl) {
 }
 
 function staticHandler(req, res, pathname) {
+  if (pathname.startsWith('/uploads/')) {
+    const uploadPath = path.normalize(path.join(UPLOADS_DIR, pathname.slice('/uploads/'.length)));
+    const uploadRoot = path.normalize(UPLOADS_DIR);
+    if (!uploadPath.startsWith(uploadRoot)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+    fs.readFile(uploadPath, (err, content) => {
+      if (err) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+      const ext = path.extname(uploadPath).toLowerCase();
+      res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+      res.end(content);
+    });
+    return;
+  }
+
   const root = staticDir();
   const filePath = pathname === '/' ? path.join(root, 'index.html') : path.join(root, pathname);
   const normalized = path.normalize(filePath);
