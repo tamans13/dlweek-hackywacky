@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Brainosaur Extension Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    h1 { color: #4ec9b0; }
+    button { padding: 10px 20px; margin: 5px; background: #007acc; color: white; border: none; cursor: pointer; }
+    button:hover { background: #005a9e; }
+    #log { background: #252526; padding: 10px; height: 300px; overflow-y: auto; border: 1px solid #3e3e42; margin-top: 10px; }
+    .log-entry { padding: 2px 0; }
+    .success { color: #4ec9b0; }
+    .error { color: #f48771; }
+    .info { color: #9cdcfe; }
+  </style>
+</head>
+<body>
+  <h1>🧬 Brainosaur Extension Debug</h1>
+  <p>Click buttons to test extension communication:</p>
+  <button onclick="testStartTracking()">Start Tracking</button>
+  <button onclick="testStopTracking()">Stop Tracking</button>
+  <button onclick="testGetStatus()">Get Status</button>
+  <button onclick="clearLog()">Clear Log</button>
+  <div id="log"></div>
+
+  <script>
+    let sessionId = 'test-session-' + Date.now();
+
+    function log(type, msg) {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(`[${type}]`, msg);
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+
+    function testStartTracking() {
+      log('info', `📤 Sending START_TRACKING with sessionId: ${sessionId}`);
+      
+      if (!window.chrome?.runtime?.sendMessage) {
+        log('error', '❌ chrome.runtime not available');
+        return;
+      }
+
+      window.chrome.runtime.sendMessage(
+        { type: "START_TRACKING", sessionId },
+        (response) => {
+          const err = window.chrome?.runtime?.lastError;
+          if (err) {
+            log('error', `❌ Error: ${err.message}`);
+          } else {
+            log('success', `✓ Response: ${JSON.stringify(response)}`);
+          }
+        }
+      );
+    }
+
+    function testStopTracking() {
+      log('info', `📤 Sending STOP_TRACKING`);
+      
+      if (!window.chrome?.runtime?.sendMessage) {
+        log('error', '❌ chrome.runtime not available');
+        return;
+      }
+
+      window.chrome.runtime.sendMessage(
+        { type: "STOP_TRACKING", reason: "test" },
+        (response) => {
+          const err = window.chrome?.runtime?.lastError;
+          if (err) {
+            log('error', `❌ Error: ${err.message}`);
+          } else {
+            log('success', `✓ Response: ${JSON.stringify(response)}`);
+          }
+        }
+      );
+    }
+
+    function testGetStatus() {
+      log('info', `📤 Sending GET_STATUS`);
+      
+      if (!window.chrome?.runtime?.sendMessage) {
+        log('error', '❌ chrome.runtime not available');
+        return;
+      }
+
+      window.chrome.runtime.sendMessage(
+        { type: "GET_STATUS" },
+        (response) => {
+          const err = window.chrome?.runtime?.lastError;
+          if (err) {
+            log('error', `❌ Error: ${err.message}`);
+          } else {
+            log('success', `✓ Response: ${JSON.stringify(response)}`);
+          }
+        }
+      );
+    }
+
+    log('info', '🚀 Test page loaded. Check background logs in chrome://extensions/');
+  </script>
+</body>
+</html>

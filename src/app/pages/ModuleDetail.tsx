@@ -10,6 +10,7 @@ import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { addTopic, classifyUrl } from "../lib/api";
 import { daysUntil, formatDate } from "../lib/format";
+import { startExtensionTracking, stopExtensionTracking } from "../lib/extension";
 
 function formatDuration(seconds: number) {
   const hrs = Math.floor(seconds / 3600);
@@ -106,12 +107,16 @@ export default function ModuleDetail() {
 
   const handleStartStudy = async () => {
     if (!moduleName || !currentTopic) return;
-    await startSession(moduleName, currentTopic);
+    const sessionId = await startSession(moduleName, currentTopic);
+    if (sessionId) {
+      await startExtensionTracking(sessionId).catch(() => { });
+    }
   };
 
   const handleEndStudy = async () => {
     if (!activeSession) return;
     await stopSession(activeSession.id);
+    await stopExtensionTracking("user_ended_session").catch(() => { });
     const takeQuiz = window.confirm("Session ended. Take a quiz for this topic now?");
     if (takeQuiz) {
       navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(activeSession.topicName)}`);
@@ -173,8 +178,8 @@ export default function ModuleDetail() {
 
   const moduleReadiness = state && state.modules[moduleName]
     ? Math.round(((topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.55 +
-        ((Number(topicsCovered || 0) / Math.max(1, Number(totalTopics || topics.length))) * 100) * 0.35 +
-        10))
+      ((Number(topicsCovered || 0) / Math.max(1, Number(totalTopics || topics.length))) * 100) * 0.35 +
+      10))
     : 0;
 
   return (
