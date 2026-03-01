@@ -61,6 +61,7 @@ function ensureDataFile() {
       tabEvents: [],
       quizAttempts: [],
       examPlans: {},
+      onboardingPersona: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -250,6 +251,175 @@ function buildInsightsHeuristic(data, moduleName) {
   };
 }
 
+const ONBOARDING_QUESTION_LABELS = {
+  'mental-sharp': 'When do you feel most mentally sharp?',
+  'focus-duration': 'How long can you focus deeply before mental fatigue?',
+  'after-2hr': 'After a 2-hour study session, you usually feel',
+  'study-method': 'When you study, you mostly',
+  'performance-drop': 'When performance drops during a session, you',
+  'phone-check': 'How often do you check your phone?',
+  'study-hours-trend': 'In the past 2 weeks, study hours',
+  'performance-trend': 'In the past 2 weeks, performance',
+  guilt: 'You feel guilty when not studying',
+  'mental-tired': 'You feel mentally tired before studying',
+};
+
+function normalizeOnboardingPayload(raw) {
+  const welcome = raw && typeof raw.welcome === 'object' ? raw.welcome : {};
+  const prefs = raw && typeof raw.prefs === 'object' ? raw.prefs : {};
+  const answers = prefs.answers && typeof prefs.answers === 'object' ? prefs.answers : {};
+  const normalizedAnswers = Object.fromEntries(
+    Object.entries(answers).map(([k, v]) => [String(k), String(v)]),
+  );
+  return {
+    profile: {
+      university: String(welcome.university || ''),
+      course: String(welcome.course || ''),
+      year: String(welcome.year || ''),
+    },
+    preferences: {
+      studyLimit: String(prefs.studyLimit || ''),
+      sleep: String(prefs.sleep || ''),
+      answers: normalizedAnswers,
+      answersHumanized: Object.entries(normalizedAnswers).map(([key, value]) => ({
+        key,
+        question: ONBOARDING_QUESTION_LABELS[key] || key,
+        answer: value,
+      })),
+    },
+  };
+}
+
+function buildOnboardingPersonaHeuristic(payload) {
+  const answers = payload.preferences.answers || {};
+  const method = answers['study-method'] || 'mix';
+  const peak = answers['mental-sharp'] || '2-6pm';
+  const focus = answers['focus-duration'] || '20-40';
+  const phoneCheck = answers['phone-check'] || 'occasionally';
+  const performanceTrend = answers['performance-trend'] || 'stable';
+
+  const focusBlockMap = {
+    '<20': '15-20 minute',
+    '20-40': '25-35 minute',
+    '40-60': '40-50 minute',
+    '60-90': '50-70 minute',
+    '90+': '75-90 minute',
+  };
+  const focusBlock = focusBlockMap[focus] || '30-45 minute';
+
+  let learningStyle = 'Balanced Adaptive Learner';
+  if (method === 'practice' || method === 'teach') learningStyle = 'Active Recall Performer';
+  if (method === 'reread') learningStyle = 'Structured Review Learner';
+  if (method === 'summarise') learningStyle = 'Synthesis Learner';
+
+  const rationale = `Your responses indicate best results with ${focusBlock} focused sessions and high-value work during ${peak}.`;
+
+  const techniques = [
+    {
+      title: 'Time-box around your natural focus window',
+      description: `Place the hardest topics in your peak period (${peak}) and use easier reviews outside that window.`,
+    },
+    {
+      title: `Use ${focusBlock} study blocks`,
+      description: 'Run a timer per block and take 5-10 minute breaks to prevent performance drop.',
+    },
+    {
+      title: 'Use active recall before rereading',
+      description: 'Attempt 3-5 practice questions first, then review notes only for errors.',
+    },
+    {
+      title: 'End each session with a mini-check',
+      description: 'Write a 3-point summary and one “still unclear” item for the next session.',
+    },
+  ];
+
+  if (phoneCheck === '20-30min' || phoneCheck === 'frequently') {
+    techniques.push({
+      title: 'Apply distraction guardrails',
+      description: 'Keep phone away and batch non-study checks into break windows only.',
+    });
+  }
+
+  if (performanceTrend === 'slight-decline' || performanceTrend === 'dropped') {
+    techniques.push({
+      title: 'Reduce load and rebuild consistency',
+      description: 'Use shorter blocks for 1 week and prioritize weakest topics before volume.',
+    });
+  }
+
+  return {
+    learningStyle,
+    rationale,
+    studyTechniques: techniques.slice(0, 5),
+  };
+}
+
+function readResponseText(result) {
+  return result.output_text ||
+    (result.output || [])
+      .flatMap((o) => o.content || [])
+      .map((c) => c.text || '')
+      .join('\n');
+}
+
+async function buildOnboardingPersonaWithOpenAI(payload) {
+  if (!OPENAI_API_KEY) return buildOnboardingPersonaHeuristic(payload);
+
+  try {
+    const prompt = [
+      'You are an educational coach. Return strict JSON only.',
+      'Required JSON shape: { "learningStyle": string, "rationale": string, "studyTechniques": [{ "title": string, "description": string }] }',
+      'Return exactly 4 to 5 studyTechniques.',
+      'Techniques must be specific, actionable, and directly grounded in the questionnaire.',
+      'Avoid generic advice.',
+      JSON.stringify(payload),
+    ].join('\n');
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      return buildOnboardingPersonaHeuristic(payload);
+    }
+
+    const result = await response.json();
+    const text = readResponseText(result);
+    const parsed = JSON.parse(text);
+    if (!parsed.learningStyle || !parsed.rationale || !Array.isArray(parsed.studyTechniques)) {
+      return buildOnboardingPersonaHeuristic(payload);
+    }
+
+    const normalizedTechniques = parsed.studyTechniques
+      .filter((x) => x && typeof x === 'object')
+      .slice(0, 5)
+      .map((x) => ({
+        title: String(x.title || '').trim(),
+        description: String(x.description || '').trim(),
+      }))
+      .filter((x) => x.title && x.description);
+
+    if (!normalizedTechniques.length) return buildOnboardingPersonaHeuristic(payload);
+
+    return {
+      learningStyle: String(parsed.learningStyle),
+      rationale: String(parsed.rationale),
+      studyTechniques: normalizedTechniques,
+    };
+  } catch {
+    return buildOnboardingPersonaHeuristic(payload);
+  }
+}
+
 async function buildInsightsWithOpenAI(data, moduleName) {
   if (!OPENAI_API_KEY) return buildInsightsHeuristic(data, moduleName);
   const mod = moduleState(data, moduleName);
@@ -296,11 +466,7 @@ async function buildInsightsWithOpenAI(data, moduleName) {
   }
 
   const result = await response.json();
-  const text = result.output_text ||
-    (result.output || [])
-      .flatMap((o) => o.content || [])
-      .map((c) => c.text || '')
-      .join('\n');
+  const text = readResponseText(result);
 
   try {
     const parsed = JSON.parse(text);
@@ -348,6 +514,18 @@ async function apiHandler(req, res, pathname) {
     for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
     saveData(data);
     return send(res, 200, { ...data, aiEnabled: Boolean(OPENAI_API_KEY) });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/onboarding/persona') {
+    const body = await parseBody(req);
+    const payload = normalizeOnboardingPayload(body);
+    const analysis = await buildOnboardingPersonaWithOpenAI(payload);
+    data.onboardingPersona = {
+      ...analysis,
+      generatedAt: nowIso(),
+    };
+    saveData(data);
+    return send(res, 200, { ok: true, analysis, aiEnabled: Boolean(OPENAI_API_KEY) });
   }
 
   if (req.method === 'POST' && pathname === '/api/profile') {
