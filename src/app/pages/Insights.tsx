@@ -1,25 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Clock, AlertTriangle, Info, ArrowRight } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "../components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useAppData } from "../state/AppDataContext";
 
 export default function Insights() {
   const { state, loading, error, runInsights } = useAppData();
-  const moduleNames = state ? state.profile.modules : [];
-
-  const [moduleName, setModuleName] = useState("");
   const [insightSummary, setInsightSummary] = useState("");
   const [insightActions, setInsightActions] = useState<string[]>([]);
   const [insightLoading, setInsightLoading] = useState(false);
-
-  useEffect(() => {
-    if (!moduleName && moduleNames.length) {
-      setModuleName(moduleNames[0]);
-    }
-  }, [moduleNames, moduleName]);
 
   const accuracyByTimeData = useMemo(() => {
     if (!state) return [];
@@ -95,10 +85,9 @@ export default function Insights() {
   }, [accuracyByTimeData]);
 
   const handleGenerateInsights = async () => {
-    if (!moduleName) return;
     setInsightLoading(true);
     try {
-      const insights = await runInsights(moduleName);
+      const insights = await runInsights();
       setInsightSummary(insights.summary);
       setInsightActions(insights.actions || []);
     } finally {
@@ -130,20 +119,8 @@ export default function Insights() {
               <Info className="w-5 h-5" />
             </button>
           </div>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-            <div className="md:col-span-2">
-              <Select value={moduleName} onValueChange={setModuleName}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select module for AI insights" />
-                </SelectTrigger>
-                <SelectContent>
-                  {moduleNames.map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button onClick={handleGenerateInsights} disabled={!moduleName || insightLoading} className="md:col-span-1">
+          <div className="mt-4">
+            <Button onClick={handleGenerateInsights} disabled={insightLoading}>
               {insightLoading ? "Generating..." : "Generate Insights"}
             </Button>
           </div>

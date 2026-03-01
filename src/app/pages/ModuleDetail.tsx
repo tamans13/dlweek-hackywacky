@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ArrowLeft, Clock, CheckCircle2, Calendar, Plus, Upload, X, Play } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
-import { addTopic, classifyUrl } from "../lib/api";
+import { addTopic } from "../lib/api";
 import { daysUntil, formatDate } from "../lib/format";
 
 function formatDuration(seconds: number) {
@@ -28,7 +28,7 @@ function dueInLabel(dateIso: string) {
 export default function ModuleDetail() {
   const { moduleId } = useParams();
   const navigate = useNavigate();
-  const { state, loading, error, startSession, stopSession, logTab, saveExamPlan, refresh } = useAppData();
+  const { state, loading, error, startSession, stopSession, saveExamPlan, saveProfileData, refresh } = useAppData();
 
   const moduleNames = state ? state.profile.modules : [];
   const moduleName = fromSlugMatch(moduleId || "", moduleNames || []);
@@ -79,8 +79,6 @@ export default function ModuleDetail() {
   const [examDate, setExamDate] = useState(examPlan?.examDate || "");
   const [totalTopics, setTotalTopics] = useState(examPlan?.totalTopics?.toString() || "");
   const [topicsCovered, setTopicsCovered] = useState(examPlan?.topicsCovered?.toString() || "");
-  const [tabUrl, setTabUrl] = useState("");
-  const [tabLabel, setTabLabel] = useState("");
 
   useEffect(() => {
     setExamDate(examPlan?.examDate || "");
@@ -133,21 +131,23 @@ export default function ModuleDetail() {
       examDate,
       totalTopics: Number(totalTopics || topics.length),
       topicsCovered: Number(topicsCovered || 0),
+      topicsTested: examPlan?.topicsTested || topics.map((topic) => topic.name),
     });
     setShowAddExamDialog(false);
   };
 
-  const handleLogTab = async () => {
-    if (!moduleName || !tabUrl.trim()) return;
-    await logTab({
-      moduleName,
-      topicName: currentTopic || activeSession?.topicName || "General",
-      url: tabUrl.trim(),
-      eventType: classifyUrl(tabUrl.trim()),
-      userLabel: tabLabel.trim() || null,
+  const handleDeleteModule = async () => {
+    if (!state || !moduleName) return;
+    if (!window.confirm(`Delete module "${moduleName}"? This will remove its topics and related records.`)) return;
+
+    const nextModules = state.profile.modules.filter((name) => name !== moduleName);
+    await saveProfileData({
+      university: state.profile.university,
+      yearOfStudy: state.profile.yearOfStudy,
+      courseOfStudy: state.profile.courseOfStudy,
+      modules: nextModules,
     });
-    setTabUrl("");
-    setTabLabel("");
+    navigate("/dashboard/modules");
   };
 
   if (loading && !state) {
@@ -291,15 +291,6 @@ export default function ModuleDetail() {
         </div>
 
         <div className="bg-card border border-border rounded-lg p-5">
-          <h3 className="font-medium text-foreground text-lg mb-4">Focus Behavior Events</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <Input placeholder="Visited URL" value={tabUrl} onChange={(e) => setTabUrl(e.target.value)} className="md:col-span-2" />
-            <Input placeholder="Optional label (educational/video/etc)" value={tabLabel} onChange={(e) => setTabLabel(e.target.value)} />
-            <Button onClick={handleLogTab}>Log Website Event</Button>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border rounded-lg p-5">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Spaced Repetition Queue</h3>
@@ -396,6 +387,12 @@ export default function ModuleDetail() {
               </Link>
             ))}
           </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button variant="destructive" onClick={handleDeleteModule}>
+            Delete Module
+          </Button>
         </div>
       </div>
     </div>

@@ -68,6 +68,7 @@ export interface ExamPlan {
   examDate: string;
   totalTopics: number;
   topicsCovered: number;
+  topicsTested: string[];
   updatedAt: string;
 }
 
@@ -175,6 +176,13 @@ export function addTopic(payload: { moduleName: string; topicName: string }) {
   });
 }
 
+export function deleteTopic(payload: { moduleName: string; topicName: string }) {
+  return request<{ ok: true }>("/api/topic/delete", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function submitQuiz(payload: {
   moduleName: string;
   topicName: string;
@@ -207,6 +215,7 @@ export function updateExamPlan(payload: {
   examDate: string;
   totalTopics: number;
   topicsCovered: number;
+  topicsTested: string[];
 }) {
   return request<{ ok: true; readiness: { score: number; reason: string } }>("/api/exam-plan", {
     method: "POST",
@@ -218,10 +227,10 @@ export function fetchReadiness() {
   return request<{ readiness: ReadinessItem[] }>("/api/readiness");
 }
 
-export function generateInsights(moduleName: string) {
+export function generateInsights(moduleName?: string) {
   return request<{ ok: true; insights: InsightPayload; aiEnabled: boolean }>("/api/insights/generate", {
     method: "POST",
-    body: JSON.stringify({ moduleName }),
+    body: JSON.stringify(moduleName ? { moduleName } : {}),
   });
 }
 

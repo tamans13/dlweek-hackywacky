@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   BackendState,
+  deleteTopic,
   fetchDueQuizzes,
   fetchReadiness,
   fetchState,
@@ -53,8 +54,10 @@ interface AppDataContextValue {
     examDate: string;
     totalTopics: number;
     topicsCovered: number;
+    topicsTested: string[];
   }) => Promise<{ score: number; reason: string }>;
-  runInsights: (moduleName: string) => Promise<{ summary: string; actions: string[] }>;
+  deleteTopicData: (payload: { moduleName: string; topicName: string }) => Promise<void>;
+  runInsights: (moduleName?: string) => Promise<{ summary: string; actions: string[] }>;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
@@ -135,7 +138,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveExamPlan = useCallback(
-    async (payload: { moduleName: string; examDate: string; totalTopics: number; topicsCovered: number }) => {
+    async (payload: { moduleName: string; examDate: string; totalTopics: number; topicsCovered: number; topicsTested: string[] }) => {
       const result = await updateExamPlan(payload);
       await refresh();
       return result.readiness;
@@ -143,7 +146,15 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     [refresh],
   );
 
-  const runInsights = useCallback(async (moduleName: string) => {
+  const deleteTopicData = useCallback(
+    async (payload: { moduleName: string; topicName: string }) => {
+      await deleteTopic(payload);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const runInsights = useCallback(async (moduleName?: string) => {
     const result = await generateInsights(moduleName);
     await refresh();
     return result.insights;
@@ -163,6 +174,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       logTab,
       submitQuizAttempt,
       saveExamPlan,
+      deleteTopicData,
       runInsights,
     }),
     [
@@ -178,6 +190,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       logTab,
       submitQuizAttempt,
       saveExamPlan,
+      deleteTopicData,
       runInsights,
     ],
   );

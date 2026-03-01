@@ -210,8 +210,13 @@ function scoreSlope(arr) {
 function readinessScore(moduleName, data) {
   const mod = moduleState(data, moduleName);
   const exam = data.examPlans[moduleName];
-  const topics = Object.values(mod.topics);
-  if (!exam || !topics.length) return { score: 0, reason: 'Add exam date and topic coverage data to estimate readiness.' };
+  if (!exam || !exam.examDate) return { score: 0, reason: 'Add exam date and topic coverage data to estimate readiness.' };
+
+  const testedNames = Array.isArray(exam.topicsTested) ? exam.topicsTested : [];
+  const topics = testedNames
+    .map((name) => mod.topics[name])
+    .filter(Boolean);
+  if (!topics.length) return { score: 0, reason: 'No topics tested selected yet.' };
 
   const masteryMean = topics.reduce((a, t) => a + (t.estimatedMasteryNow || t.mastery), 0) / topics.length;
   const daysLeft = Math.max(0, daysBetween(nowIso(), exam.examDate));
@@ -227,25 +232,54 @@ function readinessScore(moduleName, data) {
 }
 
 function buildInsightsHeuristic(data, moduleName) {
-  const mod = moduleState(data, moduleName);
-  const topics = Object.values(mod.topics);
-  const weakest = topics
+  const allModules = Object.keys(data.modules);
+  const targetModules = moduleName ? [moduleName] : allModules;
+  const metrics = targetModules.map((name) => {
+    const mod = moduleState(data, name);
+    return {
+      moduleName: name,
+      burnoutRisk: mod.burnoutRisk || 0,
+      focusEfficiency: mod.focusEfficiency || 0,
+      readiness: readinessScore(name, data),
+      topics: Object.values(mod.topics).map((topic) => ({ ...topic, moduleName: name })),
+    };
+  });
+
+  const allTopics = metrics.flatMap((m) => m.topics);
+  const weakest = allTopics
     .slice()
     .sort((a, b) => (a.estimatedMasteryNow || a.mastery) - (b.estimatedMasteryNow || b.mastery))
     .slice(0, 3)
-    .map((x) => x.topicName);
+    .map((x) => (moduleName ? x.topicName : `${x.moduleName}: ${x.topicName}`));
+  const due = allTopics
+    .filter((t) => new Date(t.nextReviewAt) <= new Date())
+    .slice(0, 5)
+    .map((t) => (moduleName ? t.topicName : `${t.moduleName}: ${t.topicName}`));
 
-  const due = topics.filter((t) => new Date(t.nextReviewAt) <= new Date()).map((t) => t.topicName);
-  const readiness = readinessScore(moduleName, data);
+  const burnoutRisk = metrics.length
+    ? Math.round(metrics.reduce((sum, item) => sum + item.burnoutRisk, 0) / metrics.length)
+    : 0;
+  const focusEfficiency = metrics.length
+    ? Math.round(metrics.reduce((sum, item) => sum + item.focusEfficiency, 0) / metrics.length)
+    : 0;
+  const readiness = metrics.length
+    ? {
+        score: Math.round(metrics.reduce((sum, item) => sum + item.readiness.score, 0) / metrics.length),
+        reason: moduleName
+          ? metrics[0].readiness.reason
+          : `Average readiness across ${metrics.length} modules.`,
+      }
+    : { score: 0, reason: 'No modules available yet.' };
+  const label = moduleName || 'overall';
 
   return {
-    moduleName,
-    summary: `Prioritize weak topics first and move to spaced reviews. Burnout risk is ${Math.round(mod.burnoutRisk)}%.`,
+    moduleName: label,
+    summary: `Prioritize weak topics first and move to spaced reviews. Burnout risk is ${burnoutRisk}%.`,
     actions: [
       `Spend your next 30 minutes on: ${weakest.join(', ') || 'set up topic tags first'}.`,
       due.length ? `Due for review now: ${due.join(', ')}.` : 'No overdue spaced-repetition reviews today.',
-      mod.burnoutRisk > 65 ? 'Take 10-minute breaks every 40 minutes and reduce quiz volume temporarily.' : 'Keep your current pace; add one mixed-difficulty quiz per day.',
-      `Focus efficiency is ${Math.round(mod.focusEfficiency)}%. Keep distraction events under 15% of tab events.`,
+      burnoutRisk > 65 ? 'Take 10-minute breaks every 40 minutes and reduce quiz volume temporarily.' : 'Keep your current pace; add one mixed-difficulty quiz per day.',
+      `Focus efficiency is ${focusEfficiency}%. Keep distraction events under 15% of tab events.`,
       `Exam readiness: ${readiness.score}/100. ${readiness.reason}`,
     ],
   };
@@ -422,21 +456,65 @@ async function buildOnboardingPersonaWithOpenAI(payload) {
 
 async function buildInsightsWithOpenAI(data, moduleName) {
   if (!OPENAI_API_KEY) return buildInsightsHeuristic(data, moduleName);
-  const mod = moduleState(data, moduleName);
-  const payload = {
-    moduleName,
-    burnoutRisk: mod.burnoutRisk,
-    focusEfficiency: mod.focusEfficiency,
-    topics: Object.values(mod.topics).map((t) => ({
-      topicName: t.topicName,
-      mastery: t.mastery,
-      estimatedMasteryNow: t.estimatedMasteryNow,
-      nextReviewAt: t.nextReviewAt,
-      recentHistory: t.history.slice(-4),
+  const allModuleNames = Object.keys(data.modules);
+  const targetModules = moduleName ? [moduleName] : allModuleNames;
+  for (const name of targetModules) recomputeModuleScores(data, name);
+
+  const modulePayload = targetModules.map((name) => {
+    const mod = moduleState(data, name);
+    return {
+      moduleName: name,
+      burnoutRisk: mod.burnoutRisk,
+      focusEfficiency: mod.focusEfficiency,
+      topics: Object.values(mod.topics).map((t) => ({
+        topicName: t.topicName,
+        mastery: t.mastery,
+        estimatedMasteryNow: t.estimatedMasteryNow,
+        nextReviewAt: t.nextReviewAt,
+        recentHistory: t.history.slice(-4),
+      })),
+      readiness: readinessScore(name, data),
+    };
+  });
+
+  const allTopics = modulePayload.flatMap((m) =>
+    m.topics.map((topic) => ({
+      moduleName: m.moduleName,
+      topicName: topic.topicName,
+      estimatedMasteryNow: topic.estimatedMasteryNow ?? topic.mastery,
+      mastery: topic.mastery,
+      nextReviewAt: topic.nextReviewAt,
     })),
-    recentQuizAttempts: data.quizAttempts.filter((x) => x.moduleName === moduleName).slice(-10),
-    recentTabEvents: data.tabEvents.filter((x) => x.moduleName === moduleName).slice(-40),
-    readiness: readinessScore(moduleName, data),
+  );
+
+  const atRiskTopics = allTopics
+    .slice()
+    .sort((a, b) => (a.estimatedMasteryNow || a.mastery) - (b.estimatedMasteryNow || b.mastery))
+    .slice(0, 6);
+
+  const recentQuizAttempts = moduleName
+    ? data.quizAttempts.filter((x) => x.moduleName === moduleName).slice(-10)
+    : data.quizAttempts.slice(-20);
+  const recentTabEvents = moduleName
+    ? data.tabEvents.filter((x) => x.moduleName === moduleName).slice(-40)
+    : data.tabEvents.slice(-80);
+
+  const meanBurnoutRisk = modulePayload.length
+    ? Math.round(modulePayload.reduce((sum, item) => sum + (item.burnoutRisk || 0), 0) / modulePayload.length)
+    : 0;
+  const meanFocusEfficiency = modulePayload.length
+    ? Math.round(modulePayload.reduce((sum, item) => sum + (item.focusEfficiency || 0), 0) / modulePayload.length)
+    : 0;
+
+  const payload = {
+    scope: moduleName || 'overall',
+    moduleCount: targetModules.length,
+    meanBurnoutRisk,
+    meanFocusEfficiency,
+    modules: modulePayload,
+    recentQuizAttempts,
+    recentTabEvents,
+    atRiskTopics,
   };
 
   const prompt = [
@@ -474,7 +552,7 @@ async function buildInsightsWithOpenAI(data, moduleName) {
       return buildInsightsHeuristic(data, moduleName);
     }
     return {
-      moduleName,
+      moduleName: moduleName || 'overall',
       summary: String(parsed.summary),
       actions: parsed.actions.slice(0, 5).map((x) => String(x)),
     };
@@ -622,6 +700,30 @@ async function apiHandler(req, res, pathname) {
     return send(res, 200, { ok: true, topic });
   }
 
+  if (req.method === 'POST' && pathname === '/api/topic/delete') {
+    const body = await parseBody(req);
+    if (!body.moduleName || !body.topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+    const mod = data.modules[body.moduleName];
+    if (!mod || !mod.topics || !mod.topics[body.topicName]) return send(res, 404, { error: 'Topic not found' });
+
+    delete mod.topics[body.topicName];
+    data.quizAttempts = data.quizAttempts.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
+    data.studySessions = data.studySessions.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
+    data.tabEvents = data.tabEvents.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
+
+    const plan = data.examPlans[body.moduleName];
+    if (plan && Array.isArray(plan.topicsTested)) {
+      plan.topicsTested = plan.topicsTested.filter((name) => name !== body.topicName);
+      plan.totalTopics = plan.topicsTested.length;
+      plan.topicsCovered = clamp(Number(plan.topicsCovered || 0), 0, plan.totalTopics);
+      plan.updatedAt = nowIso();
+    }
+
+    recomputeModuleScores(data, body.moduleName);
+    saveData(data);
+    return send(res, 200, { ok: true });
+  }
+
   if (req.method === 'POST' && pathname === '/api/quiz/submit') {
     const body = await parseBody(req);
     const { moduleName, topicName, preScore, postScore, confidence, aiUsed } = body;
@@ -697,12 +799,21 @@ async function apiHandler(req, res, pathname) {
   if (req.method === 'POST' && pathname === '/api/exam-plan') {
     const body = await parseBody(req);
     if (!body.moduleName || !body.examDate) return send(res, 400, { error: 'moduleName and examDate required' });
+    const topicsTested = Array.isArray(body.topicsTested)
+      ? Array.from(new Set(body.topicsTested.map((x) => String(x || '').trim()).filter(Boolean)))
+      : [];
     data.examPlans[body.moduleName] = {
       examDate: body.examDate,
-      totalTopics: Number(body.totalTopics || 0),
+      totalTopics: topicsTested.length || Number(body.totalTopics || 0),
       topicsCovered: Number(body.topicsCovered || 0),
+      topicsTested,
       updatedAt: nowIso(),
     };
+    data.examPlans[body.moduleName].topicsCovered = clamp(
+      data.examPlans[body.moduleName].topicsCovered,
+      0,
+      Math.max(0, data.examPlans[body.moduleName].totalTopics),
+    );
     saveData(data);
     return send(res, 200, { ok: true, readiness: readinessScore(body.moduleName, data) });
   }
@@ -720,10 +831,9 @@ async function apiHandler(req, res, pathname) {
 
   if (req.method === 'POST' && pathname === '/api/insights/generate') {
     const body = await parseBody(req);
-    if (!body.moduleName) return send(res, 400, { error: 'moduleName required' });
-
-    recomputeModuleScores(data, body.moduleName);
-    const insights = await buildInsightsWithOpenAI(data, body.moduleName);
+    if (body.moduleName) recomputeModuleScores(data, body.moduleName);
+    else for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    const insights = await buildInsightsWithOpenAI(data, body.moduleName || '');
     return send(res, 200, { ok: true, insights, aiEnabled: Boolean(OPENAI_API_KEY) });
   }
 
