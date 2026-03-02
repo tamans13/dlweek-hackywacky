@@ -1,7 +1,10 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import zlib from 'zlib';
 import { URL } from 'url';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -83,8 +86,30 @@ const TEXT_FILE_EXTENSIONS = new Set([
   '.yml',
 ]);
 
+const MAX_JSON_BODY_BYTES = 12_000_000;
+const MAX_UPLOAD_FILE_BYTES = 7 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 8;
+const MAX_UPLOAD_TOTAL_BYTES = MAX_UPLOAD_FILE_BYTES * MAX_UPLOAD_FILES + (1 * 1024 * 1024);
+const MAX_UPLOAD_JSON_BODY_BYTES = 80_000_000;
+const MAX_EXTRACTED_TEXT_CHARS = 120_000;
+const MIN_AI_QUIZ_QUESTIONS = 3;
+const MAX_AI_QUIZ_QUESTIONS = 10;
+const GROUNDING_STOPWORDS = new Set([
+  'about', 'after', 'again', 'against', 'almost', 'also', 'among', 'and', 'another', 'because', 'before',
+  'being', 'between', 'both', 'could', 'does', 'each', 'from', 'have', 'having', 'here', 'into', 'itself',
+  'just', 'more', 'most', 'other', 'over', 'same', 'some', 'such', 'than', 'that', 'their', 'there', 'these',
+  'they', 'this', 'those', 'through', 'under', 'very', 'what', 'when', 'where', 'which', 'while', 'with',
+  'would', 'your',
+]);
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+function httpError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
 }
 
 function randomId(prefix) {
@@ -159,6 +184,7 @@ function emptyState() {
     topicDocuments: [],
     generatedQuizzes: [],
     generatedQuizAttempts: [],
+    spacedRetryQueue: [],
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -190,6 +216,7 @@ function normalizeData(data) {
     topicDocuments: Array.isArray(base.topicDocuments) ? base.topicDocuments : [],
     generatedQuizzes: Array.isArray(base.generatedQuizzes) ? base.generatedQuizzes : [],
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
+    spacedRetryQueue: Array.isArray(base.spacedRetryQueue) ? base.spacedRetryQueue : [],
   };
 
   for (const moduleName of state.profile.modules) {
@@ -274,6 +301,23 @@ function supabaseErrorText(status, text) {
   }
 }
 
+function withSupabaseSetupHint(message) {
+  const text = String(message || '').trim();
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('relation "topic_documents"')
+    || lower.includes('relation "topic_quizzes"')
+    || lower.includes('relation "topic_quiz_attempts"')
+    || lower.includes('relation "user_app_state"')
+  ) {
+    return `${text}. Run supabase/schema.sql in your Supabase SQL Editor, then restart the API server.`;
+  }
+  if (lower.includes('bucket') || lower.includes('storage')) {
+    return `${text}. Ensure storage bucket "${SUPABASE_STORAGE_BUCKET}" exists (run supabase/schema.sql), then retry.`;
+  }
+  return text;
+}
+
 async function loadSupabaseState(userId) {
   const params = new URLSearchParams({
     select: 'state',
@@ -287,7 +331,7 @@ async function loadSupabaseState(userId) {
 
   if (!getRes.ok) {
     const text = await getRes.text();
-    throw new Error(supabaseErrorText(getRes.status, text));
+    throw new Error(withSupabaseSetupHint(supabaseErrorText(getRes.status, text)));
   }
 
   const rows = await getRes.json();
@@ -313,7 +357,7 @@ async function loadSupabaseState(userId) {
 
   if (!createRes.ok) {
     const text = await createRes.text();
-    throw new Error(supabaseErrorText(createRes.status, text));
+    throw new Error(withSupabaseSetupHint(supabaseErrorText(createRes.status, text)));
   }
 
   return seed;
@@ -340,7 +384,7 @@ async function saveSupabaseState(userId, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(supabaseErrorText(res.status, text));
+    throw new Error(withSupabaseSetupHint(supabaseErrorText(res.status, text)));
   }
 }
 
@@ -1551,20 +1595,388 @@ function isTextLikeFile(fileName, mimeType) {
   const mime = String(mimeType || '').toLowerCase();
   if (mime.startsWith('text/')) return true;
   if (mime.includes('json') || mime.includes('javascript') || mime.includes('xml') || mime.includes('yaml')) return true;
+  if (ext === '.pdf' || ext === '.docx' || ext === '.pptx') return true;
+  if (mime.includes('pdf')) return true;
+  if (mime.includes('wordprocessingml') || mime.includes('msword')) return true;
+  if (mime.includes('presentationml') || mime.includes('powerpoint')) return true;
   return TEXT_FILE_EXTENSIONS.has(ext);
+}
+
+function decodeXmlEntities(value) {
+  const text = String(value || '');
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, '\'')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const codePoint = Number.parseInt(hex, 16);
+      if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) return '';
+      return String.fromCodePoint(codePoint);
+    })
+    .replace(/&#(\d+);/g, (_, num) => {
+      const codePoint = Number.parseInt(num, 10);
+      if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) return '';
+      return String.fromCodePoint(codePoint);
+    });
+}
+
+function normalizeExtractedText(value) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u0000/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+    .slice(0, MAX_EXTRACTED_TEXT_CHARS);
+}
+
+function writeTempFile(buffer, ext) {
+  const tempName = `brainosaur_${Date.now()}_${Math.random().toString(36).slice(2, 10)}${ext}`;
+  const tempPath = path.join(os.tmpdir(), tempName);
+  fs.writeFileSync(tempPath, buffer);
+  return tempPath;
+}
+
+function removeTempFile(filePath) {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+function listZipEntries(zipPath) {
+  try {
+    const out = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+    return out
+      .split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function readZipEntryText(zipPath, entryName) {
+  try {
+    const out = execFileSync('unzip', ['-p', zipPath, entryName], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    return String(out || '');
+  } catch {
+    return '';
+  }
+}
+
+function extractDocxXmlText(xml) {
+  if (!xml) return '';
+  const tokenRegex = /<w:t[^>]*>([\s\S]*?)<\/w:t>|<w:instrText[^>]*>([\s\S]*?)<\/w:instrText>|<w:tab[^>]*\/>|<w:(?:br|cr)[^>]*\/>|<\/w:p>/g;
+  let out = '';
+  let match;
+  while ((match = tokenRegex.exec(xml)) !== null) {
+    const token = match[0];
+    if (match[1] !== undefined) {
+      out += decodeXmlEntities(match[1]);
+    } else if (match[2] !== undefined) {
+      out += decodeXmlEntities(match[2]);
+    } else if (token.startsWith('<w:tab')) {
+      out += '\t';
+    } else {
+      out += '\n';
+    }
+    if (out.length >= MAX_EXTRACTED_TEXT_CHARS * 2) break;
+  }
+  return out;
+}
+
+function extractDocxText(buffer) {
+  const zipPath = writeTempFile(buffer, '.docx');
+  try {
+    const entries = listZipEntries(zipPath);
+    const selected = entries
+      .filter((name) => /^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (!selected.length) return '';
+
+    const chunks = [];
+    for (const entry of selected) {
+      const xml = readZipEntryText(zipPath, entry);
+      const text = extractDocxXmlText(xml);
+      if (text) chunks.push(text);
+      const joinedLength = chunks.reduce((sum, item) => sum + item.length, 0);
+      if (joinedLength >= MAX_EXTRACTED_TEXT_CHARS * 2) break;
+    }
+
+    return normalizeExtractedText(chunks.join('\n'));
+  } finally {
+    removeTempFile(zipPath);
+  }
+}
+
+function extractPptxXmlText(xml) {
+  if (!xml) return '';
+  const tokenRegex = /<a:t[^>]*>([\s\S]*?)<\/a:t>|<a:tab[^>]*\/>|<a:br[^>]*\/>|<\/a:p>/g;
+  let out = '';
+  let match;
+  while ((match = tokenRegex.exec(xml)) !== null) {
+    const token = match[0];
+    if (match[1] !== undefined) {
+      out += decodeXmlEntities(match[1]);
+    } else if (token.startsWith('<a:tab')) {
+      out += '\t';
+    } else {
+      out += '\n';
+    }
+    if (out.length >= MAX_EXTRACTED_TEXT_CHARS * 2) break;
+  }
+  return out;
+}
+
+function extractPptxText(buffer) {
+  const zipPath = writeTempFile(buffer, '.pptx');
+  try {
+    const entries = listZipEntries(zipPath);
+    const selected = entries
+      .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (!selected.length) return '';
+
+    const chunks = [];
+    for (const entry of selected) {
+      const xml = readZipEntryText(zipPath, entry);
+      const text = extractPptxXmlText(xml);
+      if (text) chunks.push(text);
+      const joinedLength = chunks.reduce((sum, item) => sum + item.length, 0);
+      if (joinedLength >= MAX_EXTRACTED_TEXT_CHARS * 2) break;
+    }
+
+    return normalizeExtractedText(chunks.join('\n'));
+  } finally {
+    removeTempFile(zipPath);
+  }
+}
+
+function decodePdfLiteralString(raw) {
+  let out = '';
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch !== '\\') {
+      out += ch;
+      continue;
+    }
+
+    const next = raw[i + 1];
+    if (next === undefined) break;
+    i += 1;
+
+    if (next === 'n') out += '\n';
+    else if (next === 'r') out += '\r';
+    else if (next === 't') out += '\t';
+    else if (next === 'b') out += '\b';
+    else if (next === 'f') out += '\f';
+    else if (next === '(' || next === ')' || next === '\\') out += next;
+    else if (/[0-7]/.test(next)) {
+      let oct = next;
+      for (let j = 0; j < 2; j += 1) {
+        const c = raw[i + 1];
+        if (c && /[0-7]/.test(c)) {
+          oct += c;
+          i += 1;
+        } else {
+          break;
+        }
+      }
+      out += String.fromCharCode(parseInt(oct, 8));
+    } else if (next === '\n') {
+      // Escaped line break continuation.
+    } else if (next === '\r') {
+      if (raw[i + 1] === '\n') i += 1;
+    } else {
+      out += next;
+    }
+  }
+  return out;
+}
+
+function decodeUtf16Be(buffer) {
+  let out = '';
+  for (let i = 0; i + 1 < buffer.length; i += 2) {
+    out += String.fromCharCode((buffer[i] << 8) | buffer[i + 1]);
+  }
+  return out;
+}
+
+function decodePdfHexString(hex) {
+  const clean = String(hex || '').replace(/\s+/g, '');
+  if (!clean) return '';
+  const normalized = clean.length % 2 ? `${clean}0` : clean;
+  let bytes;
+  try {
+    bytes = Buffer.from(normalized, 'hex');
+  } catch {
+    return '';
+  }
+  if (bytes.length >= 2) {
+    if (bytes[0] === 0xFE && bytes[1] === 0xFF) return decodeUtf16Be(bytes.slice(2));
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) return bytes.slice(2).toString('utf16le');
+  }
+  return bytes.toString('latin1');
+}
+
+function extractPdfStringsFromContent(content) {
+  const chunks = [];
+  let match;
+
+  const literalTj = /\((?:\\.|[^\\()])*\)\s*Tj/g;
+  while ((match = literalTj.exec(content)) !== null) {
+    const raw = match[0].replace(/\)\s*Tj$/, '').slice(1);
+    const text = decodePdfLiteralString(raw);
+    if (text.trim()) chunks.push(text);
+  }
+
+  const hexTj = /<([0-9A-Fa-f\s]+)>\s*Tj/g;
+  while ((match = hexTj.exec(content)) !== null) {
+    const text = decodePdfHexString(match[1]);
+    if (text.trim()) chunks.push(text);
+  }
+
+  const arrayTj = /\[(.*?)\]\s*TJ/gs;
+  while ((match = arrayTj.exec(content)) !== null) {
+    const body = match[1];
+    const tokenRegex = /\((?:\\.|[^\\()])*\)|<([0-9A-Fa-f\s]+)>/g;
+    let tokenMatch;
+    let combined = '';
+    while ((tokenMatch = tokenRegex.exec(body)) !== null) {
+      if (tokenMatch[1] !== undefined) {
+        combined += decodePdfHexString(tokenMatch[1]);
+      } else {
+        const token = tokenMatch[0];
+        combined += decodePdfLiteralString(token.slice(1, -1));
+      }
+    }
+    if (combined.trim()) chunks.push(combined);
+  }
+
+  return chunks.join('\n');
+}
+
+function getPdfStreamBuffers(buffer) {
+  const streams = [];
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    const streamIdx = buffer.indexOf('stream', cursor, 'latin1');
+    if (streamIdx === -1) break;
+
+    let start = streamIdx + 6;
+    if (buffer[start] === 0x0d && buffer[start + 1] === 0x0a) start += 2;
+    else if (buffer[start] === 0x0a || buffer[start] === 0x0d) start += 1;
+
+    const endIdx = buffer.indexOf('endstream', start, 'latin1');
+    if (endIdx === -1) break;
+
+    let end = endIdx;
+    while (end > start && (buffer[end - 1] === 0x0a || buffer[end - 1] === 0x0d)) end -= 1;
+
+    streams.push(buffer.slice(start, end));
+    cursor = endIdx + 9;
+    if (streams.length >= 1200) break;
+  }
+
+  return streams;
+}
+
+function extractPdfText(buffer) {
+  const streams = getPdfStreamBuffers(buffer);
+  const chunks = [];
+  let totalChars = 0;
+
+  const pushChunk = (text) => {
+    const normalized = normalizeExtractedText(text);
+    if (!normalized) return;
+    chunks.push(normalized);
+    totalChars += normalized.length;
+  };
+
+  for (const stream of streams) {
+    if (!stream.length) continue;
+
+    const candidates = [stream];
+    try {
+      candidates.push(zlib.inflateSync(stream));
+    } catch {
+      // Ignore decode failures.
+    }
+    try {
+      candidates.push(zlib.inflateRawSync(stream));
+    } catch {
+      // Ignore decode failures.
+    }
+
+    for (const candidate of candidates) {
+      const content = candidate.toString('latin1');
+      const extracted = extractPdfStringsFromContent(content);
+      if (extracted) pushChunk(extracted);
+      if (totalChars >= MAX_EXTRACTED_TEXT_CHARS) break;
+    }
+
+    if (totalChars >= MAX_EXTRACTED_TEXT_CHARS) break;
+  }
+
+  if (!chunks.length) {
+    // Last resort: capture obvious literal text chunks from the raw PDF bytes.
+    const raw = buffer.toString('latin1');
+    const literals = raw.match(/\((?:\\.|[^\\()]){6,}\)/g) || [];
+    const fallback = literals
+      .slice(0, 1500)
+      .map((token) => decodePdfLiteralString(token.slice(1, -1)))
+      .join('\n');
+    pushChunk(fallback);
+  }
+
+  return normalizeExtractedText(chunks.join('\n'));
 }
 
 function extractTextFromFile(fileName, mimeType, buffer) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
-  if (!isTextLikeFile(fileName, mimeType)) {
-    if (ext === '.pdf') {
-      return 'PDF uploaded. Text extraction is not enabled in this build; convert key sections to .txt/.md for quiz generation quality.';
-    }
-    return '';
-  }
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
+
+  if (ext === '.docx') {
+    try {
+      return extractDocxText(buffer);
+    } catch (err) {
+      console.warn('DOCX extraction failed', fileName, err instanceof Error ? err.message : err);
+      return '';
+    }
+  }
+
+  if (ext === '.pptx') {
+    try {
+      return extractPptxText(buffer);
+    } catch (err) {
+      console.warn('PPTX extraction failed', fileName, err instanceof Error ? err.message : err);
+      return '';
+    }
+  }
+
+  if (ext === '.pdf') {
+    try {
+      return extractPdfText(buffer);
+    } catch (err) {
+      console.warn('PDF extraction failed', fileName, err instanceof Error ? err.message : err);
+      return '';
+    }
+  }
+
+  if (!isTextLikeFile(fileName, mimeType)) return '';
+
   try {
-    return buffer.toString('utf8', 0, MAX_EXTRACTED_TEXT_CHARS);
+    return normalizeExtractedText(buffer.toString('utf8', 0, MAX_EXTRACTED_TEXT_CHARS));
   } catch {
     return '';
   }
@@ -1631,22 +2043,25 @@ function parseMultipart(req) {
     const contentType = String(req.headers['content-type'] || '');
     const boundaryMatch = /boundary=([^;]+)/i.exec(contentType);
     if (!boundaryMatch) {
-      reject(new Error('Missing multipart boundary'));
+      reject(httpError(400, 'Missing multipart boundary.'));
       return;
     }
     const boundary = boundaryMatch[1];
     const chunks = [];
     let total = 0;
+    let failed = false;
     req.on('data', (chunk) => {
+      if (failed) return;
       total += chunk.length;
-      if (total > 25_000_000) {
-        reject(new Error('Upload too large'));
-        req.destroy();
+      if (total > MAX_UPLOAD_TOTAL_BYTES) {
+        failed = true;
+        reject(httpError(413, `Upload payload too large. Keep combined upload size under ${Math.floor(MAX_UPLOAD_TOTAL_BYTES / (1024 * 1024))}MB.`));
         return;
       }
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     req.on('end', () => {
+      if (failed) return;
       try {
         const full = Buffer.concat(chunks);
         resolve(parseMultipartBody(full, boundary));
@@ -1654,7 +2069,10 @@ function parseMultipart(req) {
         reject(err);
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (failed) return;
+      reject(err);
+    });
   });
 }
 
@@ -1680,7 +2098,7 @@ async function uploadToSupabaseStorage(userId, moduleName, topicName, fileName, 
 
   if (!uploadRes.ok) {
     const text = await uploadRes.text();
-    throw new Error(`Storage upload failed: ${supabaseErrorText(uploadRes.status, text)}`);
+    throw new Error(`Storage upload failed: ${withSupabaseSetupHint(supabaseErrorText(uploadRes.status, text))}`);
   }
 
   return objectPath;
@@ -1740,7 +2158,7 @@ async function insertTopicDocument(userId, record, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to save topic document metadata: ${supabaseErrorText(res.status, text)}`);
+    throw new Error(`Failed to save topic document metadata: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
   }
 
   const rows = await res.json();
@@ -1779,7 +2197,7 @@ async function listTopicDocuments(userId, moduleName, topicName, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to list topic documents: ${supabaseErrorText(res.status, text)}`);
+    throw new Error(`Failed to list topic documents: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
   }
 
   const rows = await res.json();
@@ -1856,32 +2274,12 @@ async function deleteTopicDocuments(userId, moduleName, topicName, data) {
   }
 }
 
-function sampleFromArray(arr, count) {
-  const copy = [...arr];
-  const out = [];
-  while (copy.length && out.length < count) {
-    const idx = Math.floor(Math.random() * copy.length);
-    out.push(copy[idx]);
-    copy.splice(idx, 1);
-  }
-  return out;
-}
-
-function shuffle(arr) {
-  const next = [...arr];
-  for (let i = next.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-}
-
-function normalizeQuestions(rawQuestions, questionCount) {
+function normalizeQuestions(rawQuestions, maxCount = MAX_AI_QUIZ_QUESTIONS) {
   const out = [];
   const list = Array.isArray(rawQuestions) ? rawQuestions : [];
 
   for (const item of list) {
-    if (out.length >= questionCount) break;
+    if (out.length >= maxCount) break;
     if (!item || typeof item !== 'object') continue;
 
     const question = String(item.question || item.prompt || '').trim();
@@ -1932,163 +2330,202 @@ function isMetaNotesQuestion(text) {
   );
 }
 
-function hasGroundingEvidence(rawQuestion, contextLower) {
-  const evidence = String(rawQuestion?.evidenceQuote || rawQuestion?.evidence || '').trim();
-  if (!evidence || evidence.length < 12) return false;
-  return contextLower.includes(evidence.toLowerCase());
-}
-
-function buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan = null) {
-  const fullText = documents
-    .map((doc) => String(doc.extractedText || ''))
-    .join('\n')
-    .replace(/\s+/g, ' ')
+function normalizeMatchText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
     .trim();
-
-  const sentences = fullText
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 30)
-    .slice(0, 120);
-
-  const keywords = Array.from(
-    new Set(
-      (fullText.match(/[A-Za-z][A-Za-z0-9_-]{4,}/g) || [])
-        .map((x) => x.toLowerCase())
-        .filter((x) => x.length > 4),
-    ),
-  ).slice(0, 120);
-
-  const questions = [];
-
-  for (let i = 0; i < questionCount; i += 1) {
-    if (sentences.length >= 4) {
-      const answerSentence = sentences[i % sentences.length].slice(0, 140);
-      const distractors = sampleFromArray(
-        sentences.filter((_, idx) => idx !== i % sentences.length).map((s) => s.slice(0, 140)),
-        3,
-      );
-      while (distractors.length < 3) distractors.push('Not stated in the uploaded materials.');
-
-      const options = shuffle([answerSentence, ...distractors]);
-      questions.push({
-        id: `q${i + 1}`,
-        question: `Which statement is most supported by your uploaded materials for ${topicName}?`,
-        options,
-        answerIndex: options.indexOf(answerSentence),
-        explanation: 'Based on the uploaded document excerpts used for this heuristic quiz.',
-      });
-      continue;
-    }
-
-    const answerKeyword = keywords[i % Math.max(1, keywords.length)] || `concept_${i + 1}`;
-    const distractorKeywords = sampleFromArray(keywords.filter((x) => x !== answerKeyword), 3);
-    while (distractorKeywords.length < 3) distractorKeywords.push(`concept_${distractorKeywords.length + 1}`);
-
-    const options = shuffle([answerKeyword, ...distractorKeywords]);
-    questions.push({
-      id: `q${i + 1}`,
-      question: `Which term is most central to ${topicName} based on the uploaded material?`,
-      options,
-      answerIndex: options.indexOf(answerKeyword),
-      explanation: 'Generated from uploaded document vocabulary due limited extractable sentence context.',
-    });
-  }
-
-  return {
-    title: `${topicName} Quiz (${documents.length} source file${documents.length === 1 ? '' : 's'})`,
-    questions,
-    generator: 'heuristic',
-    difficultyPlan,
-  };
 }
 
-async function buildAiQuiz(moduleName, topicName, documents, questionCount, difficultyPlan = null) {
-  if (!OPENAI_API_KEY) {
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
+function tokenizeForGrounding(text) {
+  const normalized = normalizeMatchText(text);
+  if (!normalized) return [];
+  return normalized
+    .split(/\s+/)
+    .filter((token) => /[a-z]/.test(token))
+    .filter((token) => token.length >= 4)
+    .filter((token) => !GROUNDING_STOPWORDS.has(token));
+}
+
+function tokenOverlap(tokens, tokenSet) {
+  let hits = 0;
+  for (const token of tokens) {
+    if (tokenSet.has(token)) hits += 1;
   }
+  return hits;
+}
+
+function hasGroundingEvidence(rawQuestion, contextLower, contextTokenSet, contextNormalized) {
+  const evidence = String(rawQuestion?.evidenceQuote || rawQuestion?.evidence || '').trim();
+  if (evidence) {
+    const evidenceNormalized = normalizeMatchText(evidence);
+    if (evidenceNormalized.length >= 12 && contextNormalized.includes(evidenceNormalized)) return true;
+
+    const evidenceTokens = tokenizeForGrounding(evidenceNormalized);
+    if (evidenceTokens.length >= 3) {
+      const hits = tokenOverlap(evidenceTokens, contextTokenSet);
+      const ratio = hits / evidenceTokens.length;
+      if (hits >= Math.min(4, evidenceTokens.length) && ratio >= 0.55) return true;
+    }
+  }
+
+  // Fallback: accept if question + correct option strongly overlap with context vocabulary.
+  const questionText = String(rawQuestion?.question || rawQuestion?.prompt || '');
+  const options = Array.isArray(rawQuestion?.options) ? rawQuestion.options.map((x) => String(x || '')) : [];
+  const answerIndex = Number.isInteger(rawQuestion?.answerIndex) ? Number(rawQuestion.answerIndex) : -1;
+  const correctOption = answerIndex >= 0 && answerIndex < options.length ? options[answerIndex] : '';
+  const groundingTokens = tokenizeForGrounding(`${questionText}\n${correctOption}`);
+  if (groundingTokens.length < 3) return false;
+  const fallbackHits = tokenOverlap(groundingTokens, contextTokenSet);
+  const fallbackRatio = fallbackHits / groundingTokens.length;
+  return fallbackHits >= 3 && fallbackRatio >= 0.5;
+}
+
+function questionFingerprint(rawQuestion) {
+  return String(rawQuestion?.question || rawQuestion?.prompt || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function evidenceFingerprint(rawQuestion) {
+  return String(rawQuestion?.evidenceQuote || rawQuestion?.evidence || rawQuestion?.explanation || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function dedupeGroundedQuestions(rawQuestions, maxCount = MAX_AI_QUIZ_QUESTIONS) {
+  const out = [];
+  const seenQuestion = new Set();
+  const seenEvidence = new Set();
+
+  for (const rawQuestion of rawQuestions || []) {
+    const qKey = questionFingerprint(rawQuestion);
+    const eKey = evidenceFingerprint(rawQuestion);
+    if (!qKey) continue;
+    if (seenQuestion.has(qKey)) continue;
+    const evidenceKey = eKey || `q:${qKey}`;
+    if (seenEvidence.has(evidenceKey)) continue;
+    seenQuestion.add(qKey);
+    seenEvidence.add(evidenceKey);
+    out.push(rawQuestion);
+    if (out.length >= maxCount) break;
+  }
+
+  return out;
+}
+
+async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = null, options = {}) {
+  if (!OPENAI_API_KEY) {
+    throw new Error('AI quiz generation requires OPENAI_API_KEY. Add it to .env and restart the API server.');
+  }
+
+  const requestedMax = Number.isFinite(options.maxQuestions) ? Number(options.maxQuestions) : MAX_AI_QUIZ_QUESTIONS;
+  const maxQuestions = clamp(Math.round(requestedMax), 1, MAX_AI_QUIZ_QUESTIONS);
+  const requestedMin = Number.isFinite(options.minQuestions) ? Number(options.minQuestions) : MIN_AI_QUIZ_QUESTIONS;
+  const minQuestions = clamp(Math.round(requestedMin), 1, maxQuestions);
 
   const context = documents
     .map((doc, idx) => {
-      const snippet = String(doc.extractedText || '').slice(0, 4500);
+      const snippet = String(doc.extractedText || '').slice(0, 5000);
       return `Document ${idx + 1}: ${doc.fileName}\n${snippet}`;
     })
     .join('\n\n')
-    .slice(0, 28000);
+    .slice(0, 30000);
 
   if (!context.trim()) {
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
+    throw new Error('Uploaded files did not provide usable text context for AI quiz generation.');
   }
 
   const difficultyLine = difficultyPlan
     ? `Difficulty target: ${difficultyPlan.difficulty}. Current mastery ${difficultyPlan.currentMasteryPct}%, target mastery ${difficultyPlan.targetMasteryPct}%, target quiz score ${difficultyPlan.targetPostScore}%.`
     : 'Difficulty target: medium.';
 
-  const prompt = [
-    'You are a strict quiz generator for students.',
-    'Return JSON only. No markdown.',
-    'Expected JSON shape:',
-    '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string, "evidenceQuote": string }] }',
-    `Create exactly ${questionCount} multiple-choice questions with 4 options each.`,
-    `Module: ${moduleName}`,
-    `Topic: ${topicName}`,
-    difficultyLine,
-    'Rules:',
-    '- Use only the provided documents.',
-    '- Every question must test understanding of content from the documents, not whether words appear in notes.',
-    '- Never ask meta questions about notes/documents (e.g., "was this word in the notes").',
-    '- Include evidenceQuote as an exact short quote (12-180 chars) copied from documents that supports the answer.',
-    '- Keep options plausible and avoid trick ambiguity.',
-    '- answerIndex must be 0..3 and match the correct option.',
-    'Documents:',
-    context,
-  ].join('\n');
+  const contextLower = context.toLowerCase();
+  const contextNormalized = normalizeMatchText(contextLower);
+  const contextTokenSet = new Set(tokenizeForGrounding(contextLower));
+  let lastFailure = 'unknown generation error';
 
-  try {
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: prompt,
-        temperature: 0.2,
-      }),
-    });
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const retryLine = attempt === 1
+      ? ''
+      : `Retry guidance: previous draft failed because ${lastFailure}. Produce stronger grounding and more diverse question stems.`;
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.warn('Quiz generation OpenAI request failed', response.status, text);
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
+    const prompt = [
+      'You are a strict quiz generator for students.',
+      'Return JSON only. No markdown.',
+      'Expected JSON shape:',
+      '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string, "evidenceQuote": string }] }',
+      `Choose the number of questions yourself based on document breadth and complexity. Use between ${minQuestions} and ${maxQuestions} questions.`,
+      `Module: ${moduleName}`,
+      `Topic: ${topicName}`,
+      difficultyLine,
+      retryLine,
+      'Rules:',
+      '- Use only the provided documents.',
+      '- Every question must test understanding of the document content.',
+      '- Questions must be diverse; avoid repeating the same stem/pattern.',
+      '- Never ask meta questions about notes/documents (e.g., "was this word in the notes").',
+      '- Include evidenceQuote as a short quote grounded in the provided documents that supports the correct answer.',
+      '- Keep options plausible and avoid trick ambiguity.',
+      '- answerIndex must be 0..3 and match the correct option.',
+      'Documents:',
+      context,
+    ].filter(Boolean).join('\n');
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          input: prompt,
+          temperature: 0.15,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        lastFailure = `OpenAI HTTP ${response.status}: ${text}`;
+        continue;
+      }
+
+      const result = await response.json();
+      const text = readResponseText(result);
+      const parsed = extractJsonObject(text);
+
+      if (!parsed || !Array.isArray(parsed.questions)) {
+        lastFailure = 'response JSON did not include a questions array';
+        continue;
+      }
+
+      const groundedRaw = parsed.questions.filter(
+        (q) => !isMetaNotesQuestion(q?.question) && hasGroundingEvidence(q, contextLower, contextTokenSet, contextNormalized),
+      );
+      const uniqueGrounded = dedupeGroundedQuestions(groundedRaw, maxQuestions);
+      const questions = normalizeQuestions(uniqueGrounded, maxQuestions);
+
+      if (questions.length < minQuestions) {
+        lastFailure = `only ${questions.length} grounded unique questions were produced`;
+        continue;
+      }
+
+      return {
+        title: String(parsed.title || `${topicName} AI Quiz`).trim() || `${topicName} AI Quiz`,
+        questions,
+        generator: 'openai',
+        difficultyPlan,
+      };
+    } catch (err) {
+      lastFailure = err instanceof Error ? err.message : 'unexpected OpenAI error';
     }
-
-    const result = await response.json();
-    const text = readResponseText(result);
-    const parsed = extractJsonObject(text);
-
-    if (!parsed || !Array.isArray(parsed.questions)) {
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
-    }
-
-    const contextLower = context.toLowerCase();
-    const groundedRaw = parsed.questions.filter((q) => !isMetaNotesQuestion(q?.question) && hasGroundingEvidence(q, contextLower));
-    const questions = normalizeQuestions(groundedRaw, questionCount);
-    if (questions.length < questionCount) {
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
-    }
-
-    return {
-      title: String(parsed.title || `${topicName} AI Quiz`).trim() || `${topicName} AI Quiz`,
-      questions,
-      generator: 'openai',
-      difficultyPlan,
-    };
-  } catch (err) {
-    console.warn('Quiz generation error', err);
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
   }
+
+  throw new Error(`AI quiz generation failed to produce grounded questions from uploaded files (${lastFailure}). Please try again; if this persists, re-upload the notes for this topic so text extraction refreshes.`);
 }
 
 function serializeQuizForClient(quiz, includeAnswers = false) {
@@ -2165,7 +2602,7 @@ async function createTopicQuiz(userId, quizRecord, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to create quiz: ${supabaseErrorText(res.status, text)}`);
+    throw new Error(`Failed to create quiz: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
   }
 
   const rows = await res.json();
@@ -2203,7 +2640,7 @@ async function getQuizById(userId, quizId, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to load quiz: ${supabaseErrorText(res.status, text)}`);
+    throw new Error(`Failed to load quiz: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
   }
 
   const rows = await res.json();
@@ -2219,6 +2656,32 @@ async function getQuizById(userId, quizId, data) {
     sourceDocumentIds: Array.isArray(row.source_document_ids) ? row.source_document_ids : [],
     createdAt: row.created_at,
   };
+}
+
+async function hasQuizAttempt(userId, quizId, data) {
+  if (!quizId) return false;
+  if (!SUPABASE_ENABLED) {
+    return data.generatedQuizAttempts.some((attempt) => attempt.quizId === quizId);
+  }
+
+  const params = new URLSearchParams({
+    select: 'id',
+    user_id: `eq.${userId}`,
+    quiz_id: `eq.${quizId}`,
+    limit: '1',
+  });
+
+  const res = await supabaseRequest(`/rest/v1/topic_quiz_attempts?${params.toString()}`, {
+    useServiceRole: true,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to check quiz attempts: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
+  }
+
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 async function saveQuizAttempt(userId, payload, data) {
@@ -2261,7 +2724,7 @@ async function saveQuizAttempt(userId, payload, data) {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to save quiz attempt: ${supabaseErrorText(res.status, text)}`);
+    throw new Error(`Failed to save quiz attempt: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
   }
 
   const rows = await res.json();
@@ -2330,12 +2793,12 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
 
   if (!quizRes.ok) {
     const text = await quizRes.text();
-    throw new Error(`Failed to list quizzes: ${supabaseErrorText(quizRes.status, text)}`);
+    throw new Error(`Failed to list quizzes: ${withSupabaseSetupHint(supabaseErrorText(quizRes.status, text))}`);
   }
 
   if (!attemptRes.ok) {
     const text = await attemptRes.text();
-    throw new Error(`Failed to list quiz attempts: ${supabaseErrorText(attemptRes.status, text)}`);
+    throw new Error(`Failed to list quiz attempts: ${withSupabaseSetupHint(supabaseErrorText(attemptRes.status, text))}`);
   }
 
   const quizzes = await quizRes.json();
@@ -2471,6 +2934,7 @@ async function deleteModuleResources(userId, moduleName, data) {
   data.topicDocuments = data.topicDocuments.filter((x) => x.moduleName !== moduleName);
   data.generatedQuizAttempts = data.generatedQuizAttempts.filter((x) => x.moduleName !== moduleName);
   data.generatedQuizzes = data.generatedQuizzes.filter((x) => x.moduleName !== moduleName);
+  data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => x.moduleName !== moduleName);
 }
 
 function evaluateQuiz(quiz, answersInput) {
@@ -2495,29 +2959,145 @@ function evaluateQuiz(quiz, answersInput) {
   return { score, total, results };
 }
 
+function hasStartedTopicSession(data, moduleName, topicName) {
+  return data.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName);
+}
+
+function retryQuestionFingerprint(question) {
+  return String(question?.question || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function toRetryQuestionShape(question) {
+  const rawQuestion = String(question?.question || '').trim();
+  const rawOptions = Array.isArray(question?.options)
+    ? question.options.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const options = Array.from(new Set(rawOptions)).slice(0, 4);
+  while (options.length < 4) {
+    options.push(`Option ${options.length + 1}`);
+  }
+  const answerIndex = Number.isInteger(question?.answerIndex)
+    ? clamp(Number(question.answerIndex), 0, 3)
+    : 0;
+  return {
+    question: rawQuestion,
+    options,
+    answerIndex,
+    explanation: String(question?.explanation || '').trim(),
+  };
+}
+
+function dueRetryQueueForTopic(data, moduleName, topicName, atIso = nowIso()) {
+  if (!Array.isArray(data.spacedRetryQueue)) data.spacedRetryQueue = [];
+  const cutoff = new Date(atIso).getTime();
+  return data.spacedRetryQueue
+    .filter((item) => item.moduleName === moduleName && item.topicName === topicName)
+    .filter((item) => new Date(item.dueAt).getTime() <= cutoff)
+    .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());
+}
+
+function enqueueWrongQuestionsForRetry(data, quiz, evaluatedResults, submittedAt = nowIso()) {
+  if (!Array.isArray(data.spacedRetryQueue)) data.spacedRetryQueue = [];
+  const questionsById = new Map();
+  for (const question of quiz.questions || []) {
+    questionsById.set(question.id, question);
+  }
+
+  const correctFingerprints = new Set();
+  const wrongByFingerprint = new Map();
+
+  for (const result of evaluatedResults || []) {
+    const question = questionsById.get(result.questionId);
+    if (!question) continue;
+    const normalized = toRetryQuestionShape(question);
+    const fingerprint = retryQuestionFingerprint(normalized);
+    if (!fingerprint) continue;
+    if (result.isCorrect) {
+      correctFingerprints.add(fingerprint);
+      continue;
+    }
+    wrongByFingerprint.set(fingerprint, normalized);
+  }
+
+  if (correctFingerprints.size) {
+    data.spacedRetryQueue = data.spacedRetryQueue.filter((item) => {
+      if (item.moduleName !== quiz.moduleName || item.topicName !== quiz.topicName) return true;
+      return !correctFingerprints.has(String(item.fingerprint || ''));
+    });
+  }
+
+  for (const [fingerprint, question] of wrongByFingerprint.entries()) {
+    const existing = data.spacedRetryQueue.find(
+      (item) =>
+        item.moduleName === quiz.moduleName
+        && item.topicName === quiz.topicName
+        && String(item.fingerprint || '') === fingerprint,
+    );
+
+    if (existing) {
+      const nextRetryCount = Number(existing.retryCount || 0) + 1;
+      const delayDays = clamp(nextRetryCount, 1, 7);
+      existing.question = question;
+      existing.retryCount = nextRetryCount;
+      existing.dueAt = new Date(new Date(submittedAt).getTime() + delayDays * 86400000).toISOString();
+      existing.updatedAt = submittedAt;
+      continue;
+    }
+
+    data.spacedRetryQueue.push({
+      id: randomId('retry'),
+      moduleName: quiz.moduleName,
+      topicName: quiz.topicName,
+      sourceQuizId: quiz.id,
+      fingerprint,
+      question,
+      retryCount: 1,
+      dueAt: new Date(new Date(submittedAt).getTime() + 86400000).toISOString(),
+      createdAt: submittedAt,
+      updatedAt: submittedAt,
+    });
+  }
+}
+
 function send(res, statusCode, payload) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 }
 
-function parseBody(req) {
+function parseBody(req, options = {}) {
+  const maxBytes = Number(options.maxBytes || MAX_JSON_BODY_BYTES);
   return new Promise((resolve, reject) => {
-    let body = '';
+    const chunks = [];
+    let total = 0;
+    let failed = false;
     req.on('data', (chunk) => {
-      body += chunk.toString();
-      if (body.length > 12_000_000) {
-        req.destroy();
+      if (failed) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) {
+        failed = true;
+        reject(httpError(413, `Request body too large. Limit is ${Math.floor(maxBytes / (1024 * 1024))}MB.`));
+        return;
       }
+      chunks.push(buf);
     });
     req.on('end', () => {
-      if (!body) return resolve({});
+      if (failed) return;
+      if (!total) return resolve({});
       try {
-        resolve(JSON.parse(body));
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        resolve(JSON.parse(bodyText));
       } catch (err) {
-        reject(err);
+        reject(httpError(400, 'Invalid JSON request body.'));
       }
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      if (failed) return;
+      reject(err);
+    });
   });
 }
 
@@ -2679,6 +3259,7 @@ async function apiHandler(req, res, parsedUrl) {
     data.studySessions = data.studySessions.filter((x) => allowed.has(x.moduleName));
     data.tabEvents = data.tabEvents.filter((x) => allowed.has(x.moduleName));
     data.quizAttempts = data.quizAttempts.filter((x) => allowed.has(x.moduleName));
+    data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => allowed.has(x.moduleName));
 
     for (const moduleName of normalizedModules) moduleState(data, moduleName);
     await saveDataForUser(user.id, data);
@@ -2753,6 +3334,9 @@ async function apiHandler(req, res, parsedUrl) {
     data.quizAttempts = data.quizAttempts.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.studySessions = data.studySessions.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.tabEvents = data.tabEvents.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
+    data.spacedRetryQueue = (data.spacedRetryQueue || []).filter(
+      (x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName),
+    );
 
     const plan = data.examPlans[body.moduleName];
     if (plan && Array.isArray(plan.topicsTested)) {
@@ -2771,13 +3355,48 @@ async function apiHandler(req, res, parsedUrl) {
   }
 
   if (req.method === 'POST' && pathname === '/api/topic/files/upload') {
-    const body = await parseBody(req);
-    const moduleName = String(body.moduleName || '').trim();
-    const topicName = String(body.topicName || '').trim();
-    const files = Array.isArray(body.files) ? body.files : [];
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    let moduleName = '';
+    let topicName = '';
+    const files = [];
+
+    if (contentType.startsWith('multipart/form-data')) {
+      const multipart = await parseMultipart(req);
+      moduleName = String(multipart.fields.moduleName || '').trim();
+      topicName = String(multipart.fields.topicName || '').trim();
+
+      for (const rawFile of multipart.files) {
+        if (String(rawFile.fieldName || '') !== 'files') continue;
+        files.push({
+          fileName: String(rawFile.filename || '').trim(),
+          mimeType: String(rawFile.contentType || 'application/octet-stream').trim() || 'application/octet-stream',
+          buffer: Buffer.isBuffer(rawFile.buffer) ? rawFile.buffer : Buffer.alloc(0),
+        });
+      }
+    } else {
+      const body = await parseBody(req, { maxBytes: MAX_UPLOAD_JSON_BODY_BYTES });
+      moduleName = String(body.moduleName || '').trim();
+      topicName = String(body.topicName || '').trim();
+
+      const jsonFiles = Array.isArray(body.files) ? body.files : [];
+      for (const rawFile of jsonFiles) {
+        const fileName = String(rawFile.name || rawFile.fileName || '').trim();
+        const mimeType = String(rawFile.type || rawFile.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
+        const dataBase64 = String(rawFile.dataBase64 || rawFile.base64 || '').trim();
+        if (!fileName || !dataBase64) continue;
+        files.push({
+          fileName,
+          mimeType,
+          buffer: Buffer.from(dataBase64, 'base64'),
+        });
+      }
+    }
 
     if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
     if (!files.length) return send(res, 400, { error: 'files are required' });
+    if (files.length > MAX_UPLOAD_FILES) {
+      return send(res, 400, { error: `Maximum ${MAX_UPLOAD_FILES} files per upload request.` });
+    }
 
     const mod = moduleState(data, moduleName);
     topicState(mod, topicName);
@@ -2788,22 +3407,20 @@ async function apiHandler(req, res, parsedUrl) {
     const uploaded = [];
     const skipped = [];
 
-    for (const rawFile of files.slice(0, 8)) {
-      const fileName = String(rawFile.name || rawFile.fileName || '').trim();
-      const mimeType = String(rawFile.type || rawFile.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
-      const dataBase64 = String(rawFile.dataBase64 || rawFile.base64 || '').trim();
+    for (const rawFile of files.slice(0, MAX_UPLOAD_FILES)) {
+      const fileName = String(rawFile.fileName || '').trim();
+      const mimeType = String(rawFile.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
+      const buffer = Buffer.isBuffer(rawFile.buffer) ? rawFile.buffer : Buffer.alloc(0);
 
-      if (!fileName || !dataBase64) continue;
+      if (!fileName || !buffer.length) continue;
       const normalizedName = fileName.toLowerCase();
       if (existingNames.has(normalizedName)) {
         skipped.push(fileName);
         continue;
       }
 
-      const buffer = Buffer.from(dataBase64, 'base64');
-      if (!buffer.length) continue;
-      if (buffer.length > 7 * 1024 * 1024) {
-        return send(res, 400, { error: `File ${fileName} exceeds 7MB limit` });
+      if (buffer.length > MAX_UPLOAD_FILE_BYTES) {
+        return send(res, 400, { error: `File ${fileName} exceeds ${Math.floor(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))}MB limit` });
       }
 
       const extractedText = extractTextFromFile(fileName, mimeType, buffer);
@@ -2901,21 +3518,37 @@ async function apiHandler(req, res, parsedUrl) {
     const body = await parseBody(req);
     const moduleName = String(body.moduleName || '').trim();
     const topicName = String(body.topicName || '').trim();
-    const questionCount = clamp(Number(body.questionCount || 5), 3, 10);
 
     if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+    if (!hasStartedTopicSession(data, moduleName, topicName)) {
+      return send(res, 400, {
+        error: 'Start a study session timer for this topic before generating an AI quiz.',
+      });
+    }
+
+    const generationAt = nowIso();
+    const dueRetryItems = dueRetryQueueForTopic(data, moduleName, topicName, generationAt).slice(0, MAX_AI_QUIZ_QUESTIONS);
+    const retryRawQuestions = dueRetryItems
+      .map((item) => item.question)
+      .filter((question) => question && typeof question === 'object')
+      .map((question) => ({
+        question: question.question,
+        options: question.options,
+        answerIndex: question.answerIndex,
+        explanation: question.explanation,
+      }));
 
     const documents = await listTopicDocuments(user.id, moduleName, topicName, data);
-    if (!documents.length) {
+    if (!documents.length && !retryRawQuestions.length) {
       return send(res, 400, {
         error: 'Upload at least one document for this topic before generating a quiz.',
       });
     }
 
     const docsWithText = documents.filter((doc) => String(doc.extractedText || '').trim().length > 0);
-    if (!docsWithText.length) {
+    if (!docsWithText.length && !retryRawQuestions.length) {
       return send(res, 400, {
-        error: 'No extractable text found in uploaded files. Upload text-like files (.txt, .md, .csv, code, etc.) for quiz generation.',
+        error: 'No extractable text found in uploaded files. Supported formats include PDF, DOCX, PPTX, TXT, MD, CSV, and code files.',
       });
     }
 
@@ -2926,17 +3559,52 @@ async function apiHandler(req, res, parsedUrl) {
     const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, nowIso());
     const difficultyPlan = buildAdaptiveDifficultyPlan(masteryPct, masteryPct, decayRatePct);
 
-    const built = await buildAiQuiz(moduleName, topicName, docsWithText, questionCount, difficultyPlan);
+    const remainingCapacity = Math.max(0, MAX_AI_QUIZ_QUESTIONS - retryRawQuestions.length);
+    let built = null;
+    let aiRawQuestions = [];
+    let generator = retryRawQuestions.length ? 'spaced-repetition' : 'openai';
+
+    if (remainingCapacity > 0 && docsWithText.length) {
+      try {
+        const minQuestions = retryRawQuestions.length ? 1 : MIN_AI_QUIZ_QUESTIONS;
+        built = await buildAiQuiz(moduleName, topicName, docsWithText, difficultyPlan, {
+          minQuestions: Math.min(minQuestions, remainingCapacity),
+          maxQuestions: remainingCapacity,
+        });
+        aiRawQuestions = built.questions.map((question) => ({
+          question: question.question,
+          options: question.options,
+          answerIndex: question.answerIndex,
+          explanation: question.explanation,
+        }));
+        generator = retryRawQuestions.length ? 'spaced-repetition+openai' : built.generator;
+      } catch (err) {
+        if (!retryRawQuestions.length) {
+          return send(res, 400, { error: err instanceof Error ? err.message : 'Failed to generate AI quiz.' });
+        }
+      }
+    }
+
+    const mergedQuestions = normalizeQuestions(
+      [...retryRawQuestions, ...aiRawQuestions],
+      MAX_AI_QUIZ_QUESTIONS,
+    );
+
+    if (!mergedQuestions.length) {
+      return send(res, 400, {
+        error: 'Failed to build quiz questions from available retry items and uploaded notes.',
+      });
+    }
 
     const quiz = await createTopicQuiz(
       user.id,
       {
         moduleName,
         topicName,
-        title: built.title,
-        questions: built.questions,
+        title: String(built?.title || `${topicName} Spaced Repetition Quiz`).trim(),
+        questions: mergedQuestions,
         sourceDocumentIds: docsWithText.map((doc) => doc.id),
-        difficultyPlan: built.difficultyPlan || difficultyPlan,
+        difficultyPlan: built?.difficultyPlan || difficultyPlan,
       },
       data,
     );
@@ -2948,10 +3616,10 @@ async function apiHandler(req, res, parsedUrl) {
     return send(res, 200, {
       ok: true,
       quiz: serializeQuizForClient(quiz, false),
-      generator: built.generator,
+      generator,
       sourceDocumentCount: docsWithText.length,
       aiEnabled: Boolean(OPENAI_API_KEY),
-      difficultyPlan: built.difficultyPlan || difficultyPlan,
+      difficultyPlan: built?.difficultyPlan || difficultyPlan,
     });
   }
 
@@ -2964,9 +3632,22 @@ async function apiHandler(req, res, parsedUrl) {
 
     const quiz = await getQuizById(user.id, quizId, data);
     if (!quiz) return send(res, 404, { error: 'Quiz not found' });
+    if (!hasStartedTopicSession(data, quiz.moduleName, quiz.topicName)) {
+      return send(res, 400, {
+        error: 'Start a study session timer for this topic before taking an AI quiz.',
+      });
+    }
+
+    const alreadyAttempted = await hasQuizAttempt(user.id, quizId, data);
+    if (alreadyAttempted) {
+      return send(res, 409, {
+        error: 'This quiz has already been attempted. Retakes are disabled.',
+      });
+    }
 
     const evaluated = evaluateQuiz(quiz, answers);
     const percent = evaluated.total ? Math.round((evaluated.score / evaluated.total) * 100) : 0;
+    const submittedAt = nowIso();
 
     const relatedAttempts = data.quizAttempts
       .filter((x) => x.moduleName === quiz.moduleName && x.topicName === quiz.topicName)
@@ -2996,7 +3677,7 @@ async function apiHandler(req, res, parsedUrl) {
       postScore: masteryResult.boundedPost,
       confidence: masteryResult.boundedConfidence,
       aiUsed: masteryResult.aiUsed,
-      submittedAt: nowIso(),
+      submittedAt,
       difficultySuggestion: masteryResult.difficultyPlan.difficulty,
       nextQuizType: masteryResult.newMasteryPct < 65 ? 'targeted-remediation' : 'spaced-repetition',
       targetMasteryPct: masteryResult.difficultyPlan.targetMasteryPct,
@@ -3004,6 +3685,8 @@ async function apiHandler(req, res, parsedUrl) {
       gainPct: masteryResult.gainPct,
       decayRatePct: masteryResult.decayRatePct,
     });
+
+    enqueueWrongQuestionsForRetry(data, quiz, evaluated.results, submittedAt);
 
     recomputeModuleScores(data, quiz.moduleName);
 
@@ -3130,8 +3813,14 @@ async function apiHandler(req, res, parsedUrl) {
     const now = new Date();
     for (const [moduleName, mod] of Object.entries(data.modules)) {
       for (const topic of Object.values(mod.topics)) {
-        if (new Date(topic.nextReviewAt) <= now) {
-          due.push({ moduleName, topicName: topic.topicName, type: 'spaced-repetition' });
+        const retryDueCount = dueRetryQueueForTopic(data, moduleName, topic.topicName, now.toISOString()).length;
+        const topicDue = new Date(topic.nextReviewAt) <= now;
+        if (topicDue || retryDueCount > 0) {
+          due.push({
+            moduleName,
+            topicName: topic.topicName,
+            type: retryDueCount > 0 ? 'spaced-repetition-retry' : 'spaced-repetition',
+          });
         }
       }
     }
@@ -3297,6 +3986,11 @@ const server = http.createServer(async (req, res) => {
     return staticHandler(req, res, pathname);
   } catch (err) {
     console.error(err);
+    const statusCode = Number(err?.statusCode);
+    if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599) {
+      send(res, statusCode, { error: err instanceof Error ? err.message : 'Request failed' });
+      return;
+    }
     send(res, 500, { error: err instanceof Error ? err.message : 'Internal server error' });
   }
 });

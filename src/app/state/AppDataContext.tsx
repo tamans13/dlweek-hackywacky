@@ -250,30 +250,10 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const uploadTopicFiles = useCallback(
     async (payload: { moduleName: string; topicName: string; files: File[] }) => {
-      const files = await Promise.all(
-        payload.files.map(
-          async (file) =>
-            new Promise<{ name: string; type: string; dataBase64: string }>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => {
-                const result = String(reader.result || "");
-                const dataBase64 = result.includes(",") ? result.split(",")[1] : result;
-                resolve({
-                  name: file.name,
-                  type: file.type || "application/octet-stream",
-                  dataBase64,
-                });
-              };
-              reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
-              reader.readAsDataURL(file);
-            }),
-        ),
-      );
-
       await uploadTopicFilesApi({
         moduleName: payload.moduleName,
         topicName: payload.topicName,
-        files,
+        files: payload.files,
       });
       await refresh();
     },

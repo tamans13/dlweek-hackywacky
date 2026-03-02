@@ -433,12 +433,15 @@ export function deleteTopic(payload: { moduleName: string; topicName: string }) 
 export function uploadTopicFiles(payload: {
   moduleName: string;
   topicName: string;
-  files: Array<{
-    name: string;
-    type: string;
-    dataBase64: string;
-  }>;
+  files: File[];
 }) {
+  const form = new FormData();
+  form.append("moduleName", payload.moduleName);
+  form.append("topicName", payload.topicName);
+  for (const file of payload.files) {
+    form.append("files", file, file.name);
+  }
+
   return request<{
     ok: true;
     uploaded: Array<{ id: string; fileName: string; mimeType: string; uploadedAt: string }>;
@@ -446,7 +449,7 @@ export function uploadTopicFiles(payload: {
     documents: TopicDocument[];
   }>("/api/topic/files/upload", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: form,
   });
 }
 
@@ -458,7 +461,6 @@ export function fetchTopicFiles(moduleName: string, topicName: string) {
 export function generateTopicQuiz(payload: {
   moduleName: string;
   topicName: string;
-  questionCount?: number;
 }) {
   return request<{
     ok: true;

@@ -102,6 +102,6 @@ New auth/document/AI-quiz endpoints:
 ## Notes
 
 - If Supabase env vars are missing, backend falls back to local file mode (`data/app-data.json`) for development.
-- Best quiz generation quality comes from text-like files (`.txt`, `.md`, `.csv`, source code, etc.).
-- PDF uploads are stored, but PDF text extraction is not enabled in this build.
+- Quiz generation supports `.pdf`, `.docx`, `.pptx`, `.txt`, `.md`, `.csv`, and source code files.
+- Quality depends on readable embedded text (scanned/image-only PDFs may still yield limited extraction).
 - If OpenAI key is missing, AI insights/quiz generation fall back to heuristic mode where applicable.

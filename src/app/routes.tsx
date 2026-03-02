@@ -59,6 +59,10 @@ export const router = createBrowserRouter([
         const { default: TopicDetail } = await import("./pages/TopicDetail");
         return { Component: TopicDetail };
       }},
+      { path: "modules/:moduleId/topics/:topicId/quizzes/:quizId", lazy: async () => {
+        const { default: TopicQuizSession } = await import("./pages/TopicQuizSession");
+        return { Component: TopicQuizSession };
+      }},
       { path: "insights", Component: Insights },
       { path: "exam-readiness", Component: ExamReadiness },
       { path: "settings", Component: Settings },
