@@ -31,6 +31,10 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const REVIEW_THRESHOLD = clamp(Number(process.env.REVIEW_THRESHOLD || 70), 0, 100);
+const MIN_DECAY_PER_DAY = 2;
+const MAX_DECAY_PER_DAY = 15;
+const DEFAULT_DECAY_PER_DAY = 6;
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
@@ -94,6 +98,9 @@ const MAX_UPLOAD_JSON_BODY_BYTES = 80_000_000;
 const MAX_EXTRACTED_TEXT_CHARS = 120_000;
 const MIN_AI_QUIZ_QUESTIONS = 3;
 const MAX_AI_QUIZ_QUESTIONS = 10;
+const SPACED_REVIEW_DURATION_MINUTES = 15;
+const SPACED_REVIEW_FLASHCARD_COUNT = 8;
+const SPACED_REVIEW_MINI_QUIZ_COUNT = 4;
 const GROUNDING_STOPWORDS = new Set([
   'about', 'after', 'again', 'against', 'almost', 'also', 'among', 'and', 'another', 'because', 'before',
   'being', 'between', 'both', 'could', 'does', 'each', 'from', 'have', 'having', 'here', 'into', 'itself',
@@ -143,6 +150,13 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function safeDivide(numerator, denominator, fallback = 0) {
+  const n = Number(numerator);
+  const d = Number(denominator);
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return fallback;
+  return n / d;
+}
+
 function daysBetween(isoA, isoB) {
   const a = new Date(isoA).getTime();
   const b = new Date(isoB).getTime();
@@ -185,6 +199,7 @@ function emptyState() {
     generatedQuizzes: [],
     generatedQuizAttempts: [],
     spacedRetryQueue: [],
+    spacedReviewRuns: [],
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -217,6 +232,7 @@ function normalizeData(data) {
     generatedQuizzes: Array.isArray(base.generatedQuizzes) ? base.generatedQuizzes : [],
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
     spacedRetryQueue: Array.isArray(base.spacedRetryQueue) ? base.spacedRetryQueue : [],
+    spacedReviewRuns: Array.isArray(base.spacedReviewRuns) ? base.spacedReviewRuns : [],
   };
 
   for (const moduleName of state.profile.modules) {
@@ -537,11 +553,15 @@ function learningGain(preScore, postScore) {
 }
 
 function masteryToPercent(mastery) {
-  return clamp(Number(mastery || 0) * 10, 0, 100);
+  const value = Number(mastery || 0);
+  if (!Number.isFinite(value)) return 0;
+  // Backward compatibility: old mastery scale was 0..10.
+  if (value <= 10) return clamp(value * 10, 0, 100);
+  return clamp(value, 0, 100);
 }
 
 function percentToMastery(percent) {
-  return clamp(Number(percent || 0) / 10, 1, 10);
+  return clamp(Number(percent || 0) / 10, 0, 10);
 }
 
 function classifyUrl(url) {
@@ -569,8 +589,11 @@ function topicState(mod, topicName) {
     mod.topics[topicName] = {
       topicName,
       mastery: 5,
+      masteryPercent: 50,
+      decayPerDay: DEFAULT_DECAY_PER_DAY,
       createdAt: nowIso(),
       lastInteractionAt: nowIso(),
+      lastReviewedAt: nowIso(),
       lastQuizAt: null,
       lastDecayAppliedAt: nowIso(),
       nextReviewAt: nowIso(),
@@ -582,69 +605,173 @@ function topicState(mod, topicName) {
   if (!mod.topics[topicName].lastDecayAppliedAt) {
     mod.topics[topicName].lastDecayAppliedAt = mod.topics[topicName].lastInteractionAt || nowIso();
   }
+  normalizeTopicMasteryModel(mod.topics[topicName]);
   return mod.topics[topicName];
 }
 
-function aiRetentionDecayRatePercent(topic, moduleName, data, currentTimeIso) {
-  const last = topic.lastInteractionAt || topic.createdAt || currentTimeIso;
-  const daysIdle = daysBetween(last, currentTimeIso);
-  const masteryPct = masteryToPercent(topic.mastery || 5);
-
-  const moduleEvents = data.tabEvents.filter((e) => e.moduleName === moduleName).slice(-300);
-  const distraction = moduleEvents.filter((e) => e.eventType === 'distraction').length;
-  const focused = moduleEvents.filter((e) => e.eventType === 'learning').length;
-  const help = moduleEvents.filter((e) => e.eventType === 'help').length;
-  const distractionRatio = distraction / Math.max(1, focused + distraction + help);
-
-  const topicAttempts = data.quizAttempts
-    .filter((q) => q.moduleName === moduleName && q.topicName === topic.topicName)
-    .slice(-8);
-  const meanAccuracy = topicAttempts.length
-    ? topicAttempts.reduce((sum, item) => sum + Number(item.postScore || 0), 0) / topicAttempts.length
-    : masteryPct;
-  const consistency = topicAttempts.length > 1
-    ? 1 - clamp(stdDev(topicAttempts.map((x) => Number(x.postScore || 0))) / 40, 0, 0.6)
-    : 0.7;
-
-  const moduleFocusEfficiency = clamp(Number(moduleState(data, moduleName).focusEfficiency || 0) / 100, 0, 1);
-  const memoryStrengthDays = clamp(
-    1.5
-      + masteryPct / 14
-      + meanAccuracy / 35
-      + consistency * 2
-      + moduleFocusEfficiency * 2
-      - distractionRatio * 4
-      - Math.min(daysIdle / 10, 2),
-    1,
-    18,
+function normalizeTopicMasteryModel(topic) {
+  if (!topic || typeof topic !== 'object') return topic;
+  const now = nowIso();
+  const masteryPct = Number.isFinite(Number(topic.masteryPercent))
+    ? Number(topic.masteryPercent)
+    : masteryToPercent(topic.mastery);
+  topic.masteryPercent = clamp(masteryPct, 0, 100);
+  topic.decayPerDay = clamp(
+    Number.isFinite(Number(topic.decayPerDay)) ? Number(topic.decayPerDay) : DEFAULT_DECAY_PER_DAY,
+    MIN_DECAY_PER_DAY,
+    MAX_DECAY_PER_DAY,
   );
+  const anchor = topic.lastReviewedAt || topic.lastInteractionAt || topic.createdAt || now;
+  topic.lastReviewedAt = new Date(anchor).toISOString();
+  topic.lastDecayAppliedAt = topic.lastDecayAppliedAt || topic.lastReviewedAt;
+  if (!topic.nextReviewAt) topic.nextReviewAt = now;
+  // Keep legacy field in sync for existing UI.
+  topic.mastery = percentToMastery(topic.masteryPercent);
+  return topic;
+}
 
-  // Ebbinghaus-style forgetting curve, converted to percentage points/day.
-  const retentionAfterOneDay = Math.exp(-1 / memoryStrengthDays);
-  const baseDecayPerDayPct = (1 - retentionAfterOneDay) * 100 * 0.22;
-  const inactivityAmplifier = 1 + clamp(daysIdle / 12, 0, 1.2);
-  return clamp(baseDecayPerDayPct * inactivityAmplifier, 0.3, 12);
+function computeMasteryWithDecay(topic, currentTimeIso = nowIso()) {
+  normalizeTopicMasteryModel(topic);
+  const at = currentTimeIso || nowIso();
+  const daysSince = Math.max(0, daysBetween(topic.lastReviewedAt || at, at));
+  const masteryBase = clamp(Number(topic.masteryPercent || 0), 0, 100);
+  const decayPerDay = clamp(Number(topic.decayPerDay || DEFAULT_DECAY_PER_DAY), MIN_DECAY_PER_DAY, MAX_DECAY_PER_DAY);
+  const masteryCurrent = clamp(masteryBase - decayPerDay * daysSince, 0, 100);
+  return {
+    masteryCurrent,
+    masteryBase,
+    decayPerDay,
+    daysSince,
+    lastReviewedAt: topic.lastReviewedAt || at,
+  };
+}
+
+function computeFocusEfficiency(session = {}) {
+  const sessionTimeMinutes = Math.max(0, Number(session.sessionTimeMinutes || 0));
+  const focusedTimeMinutes = clamp(Number(session.focusedTimeMinutes || 0), 0, sessionTimeMinutes);
+  const distractionEvents = Math.max(0, Number(session.distractionEvents || 0));
+
+  const FR = clamp(safeDivide(focusedTimeMinutes, sessionTimeMinutes, 0), 0, 1);
+  const switchRate = Math.max(0, safeDivide(distractionEvents, sessionTimeMinutes, 0));
+  const Stability = 1 - clamp(switchRate / 0.5, 0, 1);
+  const FES_session = clamp(100 * (0.75 * FR + 0.25 * Stability), 0, 100);
+
+  return {
+    sessionTimeMinutes,
+    focusedTimeMinutes,
+    distractionEvents,
+    FR,
+    switchRate,
+    Stability,
+    FES_session,
+  };
+}
+
+function computeLearningGain(input = {}) {
+  const A = 18;
+  const B = 25;
+  const masteryCurrent = clamp(Number(input.masteryCurrent || 0), 0, 100);
+  const sessionScore = clamp(Number(input.sessionScore || 0), 0, 1);
+  const quizScore = clamp(Number(input.quizScore || 0), 0, 1);
+  const FES_session = clamp(Number(input.FES_session || 0), 0, 100);
+
+  const retentionHeadroom = clamp(1 - masteryCurrent / 100, 0, 1);
+  const LG_flash = A * sessionScore * retentionHeadroom;
+  const LG_quiz = B * quizScore * retentionHeadroom;
+  const LG_raw = LG_flash + LG_quiz;
+  const FocusMultiplier = 0.6 + 0.4 * (FES_session / 100);
+  const LG_final = LG_raw * FocusMultiplier;
+
+  return {
+    LG_flash,
+    LG_quiz,
+    LG_raw,
+    FocusMultiplier,
+    LG_final,
+  };
+}
+
+function updateDecayPerDay(decayPerDay, sessionScore, quizScore) {
+  let next = clamp(Number(decayPerDay || DEFAULT_DECAY_PER_DAY), MIN_DECAY_PER_DAY, MAX_DECAY_PER_DAY);
+  const flash = clamp(Number(sessionScore || 0), 0, 1);
+  const quiz = clamp(Number(quizScore || 0), 0, 1);
+
+  if (flash >= 0.8 && quiz >= 0.7) next *= 0.85;
+  else if (flash < 0.6 || quiz < 0.5) next *= 1.15;
+
+  return clamp(next, MIN_DECAY_PER_DAY, MAX_DECAY_PER_DAY);
+}
+
+function scheduleNextReview(input = {}) {
+  const masteryAfterReview = clamp(Number(input.masteryAfterReview || 0), 0, 100);
+  const decayPerDay = Number(input.decayPerDay);
+  const threshold = clamp(Number(input.threshold ?? REVIEW_THRESHOLD), 0, 100);
+  const nowAt = new Date(input.nowIsoAt || nowIso());
+
+  if (!Number.isFinite(decayPerDay) || decayPerDay <= 0) {
+    const next = new Date(nowAt.getTime() + 30 * 86400000);
+    return { daysToThreshold: 30, nextReviewAt: next.toISOString() };
+  }
+
+  let daysToThreshold = safeDivide(masteryAfterReview - threshold, decayPerDay, 0);
+  daysToThreshold = clamp(daysToThreshold, 0, 365);
+  const next = new Date(nowAt.getTime() + Math.ceil(daysToThreshold) * 86400000);
+  return {
+    daysToThreshold,
+    nextReviewAt: next.toISOString(),
+  };
+}
+
+function computeReviewPriorities(data, options = {}) {
+  const threshold = clamp(Number(options.threshold ?? REVIEW_THRESHOLD), 0, 100);
+  const topN = Math.max(1, Number(options.topN || 10));
+  const moduleFilter = String(options.moduleName || '').trim();
+  const nowAt = options.nowIso || nowIso();
+  const out = [];
+
+  for (const [moduleName, mod] of Object.entries(data.modules || {})) {
+    if (moduleFilter && moduleName !== moduleFilter) continue;
+    for (const topic of Object.values(mod.topics || {})) {
+      normalizeTopicMasteryModel(topic);
+      const decay = computeMasteryWithDecay(topic, nowAt);
+      const mastery_today = decay.masteryCurrent;
+      const priority = Math.max(0, threshold - mastery_today);
+      const schedule = scheduleNextReview({
+        masteryAfterReview: mastery_today,
+        decayPerDay: decay.decayPerDay,
+        nowIsoAt: nowAt,
+        threshold,
+      });
+      out.push({
+        moduleName,
+        topicName: topic.topicName,
+        masteryToday: Math.round(mastery_today),
+        priority: Number(priority.toFixed(2)),
+        nextReviewAt: schedule.nextReviewAt,
+      });
+    }
+  }
+
+  return out
+    .sort((a, b) => b.priority - a.priority || a.nextReviewAt.localeCompare(b.nextReviewAt))
+    .slice(0, topN);
 }
 
 function retentionDecay(topic, moduleName, data, currentTimeIso, daysOverride) {
-  const anchor = topic.lastDecayAppliedAt || topic.lastInteractionAt || topic.createdAt || currentTimeIso;
-  const days = Number.isFinite(daysOverride) ? Number(daysOverride) : daysBetween(anchor, currentTimeIso);
-  const dailyPct = aiRetentionDecayRatePercent(topic, moduleName, data, currentTimeIso);
-  return (dailyPct * Math.max(0, days)) / 10;
+  const snapshot = computeMasteryWithDecay(topic, currentTimeIso || nowIso());
+  const days = Number.isFinite(daysOverride) ? Math.max(0, Number(daysOverride)) : snapshot.daysSince;
+  const decayPct = clamp(snapshot.decayPerDay * days, 0, 100);
+  // Legacy return shape (0..10 mastery points).
+  return decayPct / 10;
 }
 
 function applyDailyMasteryDecay(topic, moduleName, data, currentTimeIso) {
-  const anchor = topic.lastDecayAppliedAt || topic.lastInteractionAt || topic.createdAt || currentTimeIso;
-  const fullDays = Math.floor(daysBetween(anchor, currentTimeIso));
-  if (fullDays <= 0) return { daysApplied: 0, decayPct: 0 };
-
-  const decayPoints = retentionDecay(topic, moduleName, data, currentTimeIso, fullDays);
-  const oldPct = masteryToPercent(topic.mastery);
-  const decayPct = decayPoints * 10;
-  const newPct = clamp(oldPct - decayPct, 0, 100);
-  topic.mastery = percentToMastery(newPct);
-  topic.lastDecayAppliedAt = new Date(new Date(anchor).getTime() + fullDays * 86400000).toISOString();
-  return { daysApplied: fullDays, decayPct };
+  const snapshot = computeMasteryWithDecay(topic, currentTimeIso || nowIso());
+  return {
+    daysApplied: Math.floor(snapshot.daysSince),
+    decayPct: clamp(snapshot.masteryBase - snapshot.masteryCurrent, 0, 100),
+    masteryCurrent: snapshot.masteryCurrent,
+  };
 }
 
 function buildAdaptiveDifficultyPlan(currentMasteryPct, preScore, decayRatePct) {
@@ -682,28 +809,90 @@ function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postS
 
   const mod = moduleState(data, moduleName);
   const topic = topicState(mod, topicName);
-  applyDailyMasteryDecay(topic, moduleName, data, now);
+  normalizeTopicMasteryModel(topic);
+  const masteryBefore = computeMasteryWithDecay(topic, now);
 
-  const oldMastery = topic.mastery;
-  const oldMasteryPct = masteryToPercent(oldMastery);
-  const gain = learningGain(boundedPre, boundedPost);
-  const gainPct = gain * 100;
-  const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, now);
+  const latestSession = [...data.studySessions]
+    .reverse()
+    .find((s) => s.moduleName === moduleName && s.topicName === topicName && s.endAt);
+  const sessionTimeMinutes = Number.isFinite(Number(options.sessionTimeMinutes))
+    ? Math.max(0, Number(options.sessionTimeMinutes))
+    : latestSession
+      ? Math.max(0, (new Date(latestSession.endAt).getTime() - new Date(latestSession.startAt).getTime()) / 60000)
+      : 30;
 
-  // Requested formula in percentage space:
-  // New mastery = old mastery + learning gain - retention decay rate
-  const newMasteryPct = clamp(oldMasteryPct + gainPct - decayRatePct, 0, 100);
+  const sessionStart = latestSession ? new Date(latestSession.startAt).getTime() : NaN;
+  const sessionEnd = latestSession ? new Date(latestSession.endAt).getTime() : NaN;
+  const inSessionEvents = Number.isFinite(sessionStart) && Number.isFinite(sessionEnd)
+    ? data.tabEvents.filter((e) => {
+      if (e.moduleName !== moduleName) return false;
+      const t = new Date(e.createdAt).getTime();
+      return t >= sessionStart && t <= sessionEnd;
+    })
+    : data.tabEvents.filter((e) => e.moduleName === moduleName).slice(-60);
+
+  const distractionEvents = Number.isFinite(Number(options.distractionEvents))
+    ? Math.max(0, Number(options.distractionEvents))
+    : inSessionEvents.filter((e) => e.eventType === 'distraction').length;
+  const focusedSignals = inSessionEvents.filter((e) => e.eventType === 'learning' || e.eventType === 'help').length;
+  const signalTotal = Math.max(1, inSessionEvents.length);
+  const focusedTimeMinutes = Number.isFinite(Number(options.focusedTimeMinutes))
+    ? clamp(Number(options.focusedTimeMinutes), 0, sessionTimeMinutes)
+    : clamp(sessionTimeMinutes * safeDivide(focusedSignals, signalTotal, 0.65), 0, sessionTimeMinutes);
+  const activeInteractionTimeMinutes = Number.isFinite(Number(options.activeInteractionTimeMinutes))
+    ? clamp(Number(options.activeInteractionTimeMinutes), 0, sessionTimeMinutes)
+    : clamp(sessionTimeMinutes * clamp(signalTotal / Math.max(1, sessionTimeMinutes), 0.25, 1), 0, sessionTimeMinutes);
+
+  const inferredQuizScore = clamp(boundedPost / 100, 0, 1);
+  const sessionScore = Number.isFinite(Number(options.sessionScore))
+    ? clamp(Number(options.sessionScore), 0, 1)
+    : inferredQuizScore;
+  const quizScore = Number.isFinite(Number(options.quizScore))
+    ? clamp(Number(options.quizScore), 0, 1)
+    : inferredQuizScore;
+
+  const focus = computeFocusEfficiency({
+    sessionTimeMinutes,
+    focusedTimeMinutes,
+    distractionEvents,
+    activeInteractionTimeMinutes,
+  });
+
+  const gains = computeLearningGain({
+    masteryCurrent: masteryBefore.masteryCurrent,
+    sessionScore,
+    quizScore,
+    FES_session: focus.FES_session,
+  });
+
+  const oldMasteryPct = masteryBefore.masteryCurrent;
+  const newMasteryPct = clamp(masteryBefore.masteryCurrent + gains.LG_final, 0, 100);
+  const decayPerDay = updateDecayPerDay(masteryBefore.decayPerDay, sessionScore, quizScore);
+  const schedule = scheduleNextReview({
+    masteryAfterReview: newMasteryPct,
+    decayPerDay,
+    nowIsoAt: now,
+    threshold: REVIEW_THRESHOLD,
+  });
+
+  topic.masteryPercent = newMasteryPct;
+  topic.decayPerDay = decayPerDay;
   topic.mastery = percentToMastery(newMasteryPct);
   topic.lastInteractionAt = now;
+  topic.lastReviewedAt = now;
   topic.lastQuizAt = now;
   topic.lastDecayAppliedAt = now;
-  topic.nextReviewAt = new Date(new Date(now).getTime() + reviewDaysForTopic(topic, moduleName, data, now) * 86400000).toISOString();
+  topic.nextReviewAt = schedule.nextReviewAt;
+  topic.estimatedMasteryNow = percentToMastery(newMasteryPct);
 
+  const gain = safeDivide(gains.LG_final, 100, 0);
+  const gainPct = gains.LG_final;
+  const decayRatePct = decayPerDay;
   const decay = decayRatePct / 10;
   const difficultyPlan = buildAdaptiveDifficultyPlan(oldMasteryPct, boundedPre, decayRatePct);
   topic.history.push({
     at: now,
-    oldMastery,
+    oldMastery: percentToMastery(oldMasteryPct),
     newMastery: topic.mastery,
     oldMasteryPct,
     newMasteryPct,
@@ -717,6 +906,15 @@ function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postS
     gain,
     gainPct,
     difficultyTarget: difficultyPlan,
+    sessionTimeMinutes,
+    focusedTimeMinutes,
+    distractionEvents,
+    activeInteractionTimeMinutes,
+    sessionScore,
+    quizScore,
+    FES_session: focus.FES_session,
+    LG_final: gains.LG_final,
+    decayPerDay,
   });
 
   return {
@@ -725,7 +923,7 @@ function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postS
     boundedPost,
     boundedConfidence,
     aiUsed,
-    oldMastery,
+    oldMastery: percentToMastery(oldMasteryPct),
     newMastery: topic.mastery,
     oldMasteryPct,
     newMasteryPct,
@@ -733,6 +931,11 @@ function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postS
     gainPct,
     decay,
     decayRatePct,
+    decayPerDay,
+    lastReviewedAt: topic.lastReviewedAt,
+    nextReviewAt: topic.nextReviewAt,
+    FES_session: focus.FES_session,
+    LG_final: gains.LG_final,
     difficultyPlan,
   };
 }
@@ -769,32 +972,14 @@ function learnerAbilityForTopic(topic, moduleName, data) {
 
 function reviewDaysForTopic(topic, moduleName, data, currentTimeIso) {
   const at = currentTimeIso || nowIso();
-  const ability = learnerAbilityForTopic(topic, moduleName, data);
-  const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, at);
-  const masteryPct = masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery ?? 5);
-  const historyCount = Array.isArray(topic.history) ? topic.history.length : 0;
-  const daysIdle = daysBetween(topic.lastInteractionAt || topic.createdAt || at, at);
-
-  const memoryStrengthDays = clamp(
-    1.6
-      + masteryPct / 18
-      + ability * 6
-      - decayRatePct / 8,
-    1.2,
-    36,
-  );
-
-  // Higher-ability learners can keep longer intervals before the same retention threshold.
-  const targetRetention = clamp(0.82 - ability * 0.12, 0.68, 0.82);
-  const baseGapDays = clamp(Math.round(-memoryStrengthDays * Math.log(targetRetention)), 1, 18);
-
-  // Successful repeated reviews gradually widen spacing; long neglect pulls spacing tighter.
-  const maturityStretch = 1 + clamp(historyCount / 12, 0, 1.2) * 0.55;
-  const abilityStretch = 1 + ability * 0.35;
-  const neglectPenalty = 1 - clamp(daysIdle / 60, 0, 0.35);
-
-  const adaptiveGap = Math.round(baseGapDays * maturityStretch * abilityStretch * neglectPenalty);
-  return clamp(adaptiveGap, 1, 45);
+  const snapshot = computeMasteryWithDecay(topic, at);
+  const schedule = scheduleNextReview({
+    masteryAfterReview: snapshot.masteryCurrent,
+    decayPerDay: snapshot.decayPerDay,
+    nowIsoAt: at,
+    threshold: REVIEW_THRESHOLD,
+  });
+  return Math.max(0, Math.ceil(daysBetween(at, schedule.nextReviewAt)));
 }
 
 function stdDev(arr) {
@@ -1013,13 +1198,16 @@ function recomputeModuleScores(data, moduleName) {
   let masterySumPct = 0;
   let topicCount = 0;
   for (const topic of Object.values(mod.topics)) {
-    applyDailyMasteryDecay(topic, moduleName, data, now);
-    const decay = retentionDecay(topic, moduleName, data, now);
-    topic.estimatedMasteryNow = clamp(topic.mastery - decay, 1, 10);
-    topic.nextReviewAt = new Date(
-      new Date(topic.lastInteractionAt).getTime() + reviewDaysForTopic(topic, moduleName, data, now) * 86400000,
-    ).toISOString();
-    masterySumPct += masteryToPercent(topic.estimatedMasteryNow);
+    normalizeTopicMasteryModel(topic);
+    const snapshot = computeMasteryWithDecay(topic, now);
+    topic.estimatedMasteryNow = percentToMastery(snapshot.masteryCurrent);
+    topic.nextReviewAt = scheduleNextReview({
+      masteryAfterReview: snapshot.masteryCurrent,
+      decayPerDay: snapshot.decayPerDay,
+      nowIsoAt: now,
+      threshold: REVIEW_THRESHOLD,
+    }).nextReviewAt;
+    masterySumPct += snapshot.masteryCurrent;
     topicCount += 1;
   }
 
@@ -2528,6 +2716,189 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
   throw new Error(`AI quiz generation failed to produce grounded questions from uploaded files (${lastFailure}). Please try again; if this persists, re-upload the notes for this topic so text extraction refreshes.`);
 }
 
+function buildHeuristicFlashcards(moduleName, topicName, documents, maxCards = SPACED_REVIEW_FLASHCARD_COUNT) {
+  const fullText = documents
+    .map((doc) => String(doc.extractedText || ''))
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const sentences = fullText
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 40)
+    .slice(0, 200);
+
+  const cards = [];
+  for (let i = 0; i < Math.min(maxCards, sentences.length); i += 1) {
+    const line = sentences[i].slice(0, 220);
+    cards.push({
+      id: `fc_${i + 1}`,
+      front: `Key point for ${topicName} #${i + 1}`,
+      back: line,
+    });
+  }
+
+  while (cards.length < Math.min(maxCards, 4)) {
+    cards.push({
+      id: `fc_${cards.length + 1}`,
+      front: `Core concept check for ${moduleName}/${topicName}`,
+      back: 'Review one key definition and one practical example from your uploaded notes.',
+    });
+  }
+  return cards.slice(0, maxCards);
+}
+
+function shuffle(items) {
+  const arr = Array.isArray(items) ? items.slice() : [];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function sampleFromArray(items, count) {
+  const n = Math.max(0, Number(count || 0));
+  if (!Array.isArray(items) || !items.length || n <= 0) return [];
+  return shuffle(items).slice(0, Math.min(n, items.length));
+}
+
+function buildHeuristicMiniQuiz(moduleName, topicName, documents, count = SPACED_REVIEW_MINI_QUIZ_COUNT) {
+  const text = documents
+    .map((doc) => String(doc.extractedText || ''))
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 40)
+    .slice(0, 60);
+  const words = Array.from(new Set((text.match(/[A-Za-z][A-Za-z0-9_-]{4,}/g) || []).map((x) => x.toLowerCase()))).slice(0, 80);
+
+  const questions = [];
+  for (let i = 0; i < count; i += 1) {
+    if (sentences.length >= 4) {
+      const answerSentence = sentences[i % sentences.length].slice(0, 140);
+      const distractors = sampleFromArray(
+        sentences.filter((_, idx) => idx !== i % sentences.length).map((s) => s.slice(0, 140)),
+        3,
+      );
+      while (distractors.length < 3) distractors.push('This statement is not supported by the uploaded notes.');
+      const options = shuffle([answerSentence, ...distractors]).slice(0, 4);
+      questions.push({
+        id: `q${i + 1}`,
+        question: `Which statement best matches the notes for ${topicName}?`,
+        options,
+        answerIndex: options.indexOf(answerSentence),
+        explanation: 'Based on extracted sentence-level context from uploaded notes.',
+      });
+      continue;
+    }
+
+    const answerWord = words[i % Math.max(1, words.length)] || `concept_${i + 1}`;
+    const distractors = sampleFromArray(words.filter((w) => w !== answerWord), 3);
+    while (distractors.length < 3) distractors.push(`concept_${distractors.length + 1}`);
+    const options = shuffle([answerWord, ...distractors]).slice(0, 4);
+    questions.push({
+      id: `q${i + 1}`,
+      question: `Which concept is most relevant to ${moduleName}/${topicName}?`,
+      options,
+      answerIndex: options.indexOf(answerWord),
+      explanation: 'Heuristic mini-quiz generated from uploaded vocabulary.',
+    });
+  }
+
+  return {
+    title: `${topicName} Mini Quiz`,
+    questions: normalizeQuestions(questions, count),
+    generator: 'heuristic',
+  };
+}
+
+async function buildAiFlashcards(moduleName, topicName, documents, maxCards = SPACED_REVIEW_FLASHCARD_COUNT) {
+  const context = documents
+    .map((doc, idx) => {
+      const snippet = String(doc.extractedText || '').slice(0, 4500);
+      return `Document ${idx + 1}: ${doc.fileName}\n${snippet}`;
+    })
+    .join('\n\n')
+    .slice(0, 26000);
+
+  if (!context.trim()) {
+    return buildHeuristicFlashcards(moduleName, topicName, documents, maxCards);
+  }
+
+  if (!OPENAI_API_KEY) {
+    return buildHeuristicFlashcards(moduleName, topicName, documents, maxCards);
+  }
+
+  const prompt = [
+    'You generate concise study flashcards grounded strictly in provided documents.',
+    'Return JSON only. No markdown.',
+    `Output shape: { "cards": [{ "front": string, "back": string }] }`,
+    `Generate between 6 and ${maxCards} flashcards.`,
+    'Rules:',
+    '- Use only source content from provided documents.',
+    '- Front should be a short question or cue.',
+    '- Back should be short factual answer (1-2 sentences).',
+    '- No meta prompts about notes/documents.',
+    `Module: ${moduleName}`,
+    `Topic: ${topicName}`,
+    'Documents:',
+    context,
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) return buildHeuristicFlashcards(moduleName, topicName, documents, maxCards);
+
+    const raw = await response.json();
+    const text = readResponseText(raw);
+    const parsed = extractJsonObject(text);
+    const list = Array.isArray(parsed?.cards) ? parsed.cards : [];
+    const cards = [];
+    for (const item of list) {
+      const front = String(item?.front || '').trim();
+      const back = String(item?.back || '').trim();
+      if (!front || !back) continue;
+      cards.push({
+        id: `fc_${cards.length + 1}`,
+        front: front.slice(0, 180),
+        back: back.slice(0, 260),
+      });
+      if (cards.length >= maxCards) break;
+    }
+    if (cards.length >= 4) return cards;
+    return buildHeuristicFlashcards(moduleName, topicName, documents, maxCards);
+  } catch {
+    return buildHeuristicFlashcards(moduleName, topicName, documents, maxCards);
+  }
+}
+
+function serializeQuestionsWithoutAnswers(questions) {
+  return (Array.isArray(questions) ? questions : []).map((q) => ({
+    id: q.id,
+    question: q.question,
+    options: Array.isArray(q.options) ? q.options : [],
+    explanation: q.explanation || '',
+  }));
+}
+
 function serializeQuizForClient(quiz, includeAnswers = false) {
   const questions = quiz.questions.map((q) => {
     const base = {
@@ -2935,6 +3306,7 @@ async function deleteModuleResources(userId, moduleName, data) {
   data.generatedQuizAttempts = data.generatedQuizAttempts.filter((x) => x.moduleName !== moduleName);
   data.generatedQuizzes = data.generatedQuizzes.filter((x) => x.moduleName !== moduleName);
   data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => x.moduleName !== moduleName);
+  data.spacedReviewRuns = (data.spacedReviewRuns || []).filter((x) => x.moduleName !== moduleName);
 }
 
 function evaluateQuiz(quiz, answersInput) {
@@ -2961,6 +3333,28 @@ function evaluateQuiz(quiz, answersInput) {
 
 function hasStartedTopicSession(data, moduleName, topicName) {
   return data.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName);
+}
+
+function latestTopicSession(data, moduleName, topicName) {
+  return [...(data.studySessions || [])]
+    .reverse()
+    .find((session) => session.moduleName === moduleName && session.topicName === topicName) || null;
+}
+
+function computeFlashcardSessionScore(flashcardsReviewed = []) {
+  const rows = Array.isArray(flashcardsReviewed) ? flashcardsReviewed : [];
+  if (!rows.length) return 0;
+  const normalizedRatings = rows.map((item) => {
+    const raw = String(item?.rating || '').trim().toLowerCase();
+    if (raw === 'easy') return 1.0;
+    if (raw === 'good') return 0.8;
+    if (raw === 'hard') return 0.5;
+    if (raw === 'again') return 0.2;
+    const numeric = Number(item?.score);
+    return clamp(Number.isFinite(numeric) ? numeric : 0.5, 0, 1);
+  });
+  const avg = normalizedRatings.reduce((sum, score) => sum + score, 0) / normalizedRatings.length;
+  return clamp(avg, 0, 1);
 }
 
 function retryQuestionFingerprint(question) {
@@ -3260,6 +3654,7 @@ async function apiHandler(req, res, parsedUrl) {
     data.tabEvents = data.tabEvents.filter((x) => allowed.has(x.moduleName));
     data.quizAttempts = data.quizAttempts.filter((x) => allowed.has(x.moduleName));
     data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => allowed.has(x.moduleName));
+    data.spacedReviewRuns = (data.spacedReviewRuns || []).filter((x) => allowed.has(x.moduleName));
 
     for (const moduleName of normalizedModules) moduleState(data, moduleName);
     await saveDataForUser(user.id, data);
@@ -3335,6 +3730,9 @@ async function apiHandler(req, res, parsedUrl) {
     data.studySessions = data.studySessions.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.tabEvents = data.tabEvents.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.spacedRetryQueue = (data.spacedRetryQueue || []).filter(
+      (x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName),
+    );
+    data.spacedReviewRuns = (data.spacedReviewRuns || []).filter(
       (x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName),
     );
 
@@ -3514,6 +3912,208 @@ async function apiHandler(req, res, parsedUrl) {
     });
   }
 
+  if (req.method === 'POST' && pathname === '/api/topic/spaced-review/start') {
+    const body = await parseBody(req);
+    const moduleName = String(body.moduleName || '').trim();
+    const topicName = String(body.topicName || '').trim();
+    if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+
+    const documents = await listTopicDocuments(user.id, moduleName, topicName, data);
+    const docsWithText = documents.filter((doc) => String(doc.extractedText || '').trim().length > 0);
+    if (!docsWithText.length) {
+      return send(res, 400, {
+        error: 'Upload notes with extractable text before starting a spaced repetition session.',
+      });
+    }
+
+    const mod = moduleState(data, moduleName);
+    const topic = topicState(mod, topicName);
+    const snapshot = computeMasteryWithDecay(topic, nowIso());
+    const difficultyPlan = buildAdaptiveDifficultyPlan(snapshot.masteryCurrent, snapshot.masteryCurrent, snapshot.decayPerDay);
+
+    const flashcards = await buildAiFlashcards(moduleName, topicName, docsWithText, SPACED_REVIEW_FLASHCARD_COUNT);
+    let miniQuiz;
+    try {
+      miniQuiz = await buildAiQuiz(moduleName, topicName, docsWithText, difficultyPlan, {
+        minQuestions: SPACED_REVIEW_MINI_QUIZ_COUNT,
+        maxQuestions: SPACED_REVIEW_MINI_QUIZ_COUNT,
+      });
+    } catch {
+      miniQuiz = buildHeuristicMiniQuiz(moduleName, topicName, docsWithText, SPACED_REVIEW_MINI_QUIZ_COUNT);
+    }
+
+    const run = {
+      id: randomId('spacedrun'),
+      moduleName,
+      topicName,
+      startedAt: nowIso(),
+      durationMinutes: SPACED_REVIEW_DURATION_MINUTES,
+      status: 'active',
+      flashcards,
+      miniQuizQuestions: miniQuiz.questions,
+      miniQuizTitle: miniQuiz.title,
+      sourceDocumentCount: docsWithText.length,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    if (!Array.isArray(data.spacedReviewRuns)) data.spacedReviewRuns = [];
+    data.spacedReviewRuns.push(run);
+    await saveDataForUser(user.id, data);
+
+    return send(res, 200, {
+      ok: true,
+      reviewRun: {
+        id: run.id,
+        moduleName,
+        topicName,
+        startedAt: run.startedAt,
+        durationMinutes: run.durationMinutes,
+        flashcards: run.flashcards,
+        miniQuiz: {
+          title: run.miniQuizTitle,
+          questions: serializeQuestionsWithoutAnswers(run.miniQuizQuestions),
+        },
+      },
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/topic/spaced-review/complete') {
+    const body = await parseBody(req);
+    const runId = String(body.runId || '').trim();
+    const answers = Array.isArray(body.answers) ? body.answers.map((x) => Number(x)) : [];
+    const flashcardsReviewed = Array.isArray(body.flashcardsReviewed) ? body.flashcardsReviewed : [];
+    if (!runId) return send(res, 400, { error: 'runId is required' });
+
+    if (!Array.isArray(data.spacedReviewRuns)) data.spacedReviewRuns = [];
+    const run = data.spacedReviewRuns.find((item) => String(item.id) === runId);
+    if (!run) return send(res, 404, { error: 'Spaced review run not found' });
+    if (run.status === 'completed') return send(res, 409, { error: 'Spaced review run already completed' });
+
+    const quiz = {
+      id: run.id,
+      moduleName: run.moduleName,
+      topicName: run.topicName,
+      title: run.miniQuizTitle || `${run.topicName} Mini Quiz`,
+      questions: Array.isArray(run.miniQuizQuestions) ? run.miniQuizQuestions : [],
+    };
+    const evaluated = evaluateQuiz(quiz, answers);
+    const percent = evaluated.total ? Math.round((evaluated.score / evaluated.total) * 100) : 0;
+
+    const nowAt = nowIso();
+    const elapsedMinutes = Math.max(0, (new Date(nowAt).getTime() - new Date(run.startedAt).getTime()) / 60000);
+    const sessionTimeMinutes = clamp(
+      Number.isFinite(Number(body.sessionTimeMinutes)) ? Number(body.sessionTimeMinutes) : elapsedMinutes,
+      1,
+      SPACED_REVIEW_DURATION_MINUTES,
+    );
+    const distractionEvents = Math.max(0, Number(body.distractionEvents || 0));
+    const focusedTimeMinutes = clamp(
+      Number.isFinite(Number(body.focusedTimeMinutes))
+        ? Number(body.focusedTimeMinutes)
+        : sessionTimeMinutes * clamp(1 - distractionEvents / Math.max(1, sessionTimeMinutes), 0.2, 1),
+      0,
+      sessionTimeMinutes,
+    );
+    const activeInteractionTimeMinutes = clamp(
+      Number.isFinite(Number(body.activeInteractionTimeMinutes))
+        ? Number(body.activeInteractionTimeMinutes)
+        : sessionTimeMinutes,
+      0,
+      sessionTimeMinutes,
+    );
+
+    const mod = moduleState(data, run.moduleName);
+    const topic = topicState(mod, run.topicName);
+    const preScore = computeMasteryWithDecay(topic, nowAt).masteryCurrent;
+    const sessionScore = computeFlashcardSessionScore(flashcardsReviewed);
+    const quizScore = clamp(safeDivide(evaluated.score, Math.max(1, evaluated.total), 0), 0, 1);
+
+    const masteryResult = applyMasteryUpdateFromQuiz(
+      data,
+      run.moduleName,
+      run.topicName,
+      preScore,
+      percent,
+      {
+        source: 'spaced_review_15min',
+        confidence: 4,
+        aiUsed: Boolean(OPENAI_API_KEY),
+        sessionScore,
+        quizScore,
+        sessionTimeMinutes,
+        focusedTimeMinutes,
+        distractionEvents,
+        activeInteractionTimeMinutes,
+      },
+    );
+
+    data.quizAttempts.push({
+      id: randomId('quiz'),
+      moduleName: run.moduleName,
+      topicName: run.topicName,
+      preScore: masteryResult.boundedPre,
+      postScore: masteryResult.boundedPost,
+      confidence: masteryResult.boundedConfidence,
+      aiUsed: masteryResult.aiUsed,
+      submittedAt: nowAt,
+      difficultySuggestion: masteryResult.difficultyPlan.difficulty,
+      nextQuizType: 'spaced-repetition-15min',
+      targetMasteryPct: masteryResult.difficultyPlan.targetMasteryPct,
+      targetPostScore: masteryResult.difficultyPlan.targetPostScore,
+      gainPct: masteryResult.gainPct,
+      decayRatePct: masteryResult.decayRatePct,
+      FES_session: masteryResult.FES_session,
+      LG_final: masteryResult.LG_final,
+      decayPerDay: masteryResult.decayPerDay,
+      sessionScore,
+      quizScore,
+    });
+
+    enqueueWrongQuestionsForRetry(data, quiz, evaluated.results, nowAt);
+
+    run.status = 'completed';
+    run.completedAt = nowAt;
+    run.updatedAt = nowAt;
+    run.result = {
+      score: evaluated.score,
+      total: evaluated.total,
+      percent,
+      sessionScore,
+      quizScore,
+      mastery_after_review: masteryResult.newMasteryPct,
+      FES_session: masteryResult.FES_session,
+      LG_final: masteryResult.LG_final,
+    };
+
+    recomputeModuleScores(data, run.moduleName);
+    await saveDataForUser(user.id, data);
+
+    return send(res, 200, {
+      ok: true,
+      runId: run.id,
+      review: evaluated.results,
+      result: {
+        score: evaluated.score,
+        total: evaluated.total,
+        percent,
+        sessionScore,
+        quizScore,
+      },
+      masteryUpdate: {
+        oldMastery: masteryResult.oldMastery,
+        newMastery: masteryResult.newMastery,
+        oldMasteryPct: masteryResult.oldMasteryPct,
+        newMasteryPct: masteryResult.newMasteryPct,
+        mastery_after_review: masteryResult.newMasteryPct,
+        decayPerDay: masteryResult.decayPerDay,
+        lastReviewedAt: masteryResult.lastReviewedAt,
+        nextReviewAt: masteryResult.nextReviewAt,
+        FES_session: masteryResult.FES_session,
+        LG_final: masteryResult.LG_final,
+      },
+    });
+  }
+
   if (req.method === 'POST' && pathname === '/api/topic/quiz/generate') {
     const body = await parseBody(req);
     const moduleName = String(body.moduleName || '').trim();
@@ -3554,9 +4154,9 @@ async function apiHandler(req, res, parsedUrl) {
 
     const mod = moduleState(data, moduleName);
     const topic = topicState(mod, topicName);
-    applyDailyMasteryDecay(topic, moduleName, data, nowIso());
-    const masteryPct = masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery);
-    const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, nowIso());
+    const snapshot = computeMasteryWithDecay(topic, nowIso());
+    const masteryPct = snapshot.masteryCurrent;
+    const decayRatePct = snapshot.decayPerDay;
     const difficultyPlan = buildAdaptiveDifficultyPlan(masteryPct, masteryPct, decayRatePct);
 
     const remainingCapacity = Math.max(0, MAX_AI_QUIZ_QUESTIONS - retryRawQuestions.length);
@@ -3684,6 +4284,9 @@ async function apiHandler(req, res, parsedUrl) {
       targetPostScore: masteryResult.difficultyPlan.targetPostScore,
       gainPct: masteryResult.gainPct,
       decayRatePct: masteryResult.decayRatePct,
+      FES_session: masteryResult.FES_session,
+      LG_final: masteryResult.LG_final,
+      decayPerDay: masteryResult.decayPerDay,
     });
 
     enqueueWrongQuestionsForRetry(data, quiz, evaluated.results, submittedAt);
@@ -3726,6 +4329,12 @@ async function apiHandler(req, res, parsedUrl) {
         gainPct: masteryResult.gainPct,
         decay: masteryResult.decay,
         decayRatePct: masteryResult.decayRatePct,
+        mastery_after_review: masteryResult.newMasteryPct,
+        decayPerDay: masteryResult.decayPerDay,
+        lastReviewedAt: masteryResult.lastReviewedAt,
+        nextReviewAt: masteryResult.nextReviewAt,
+        FES_session: masteryResult.FES_session,
+        LG_final: masteryResult.LG_final,
         difficultyPlan: masteryResult.difficultyPlan,
       },
     });
@@ -3785,6 +4394,9 @@ async function apiHandler(req, res, parsedUrl) {
       nextQuizType: masteryResult.newMasteryPct < 65 ? 'targeted-remediation' : 'spaced-repetition',
       gainPct: masteryResult.gainPct,
       decayRatePct: masteryResult.decayRatePct,
+      FES_session: masteryResult.FES_session,
+      LG_final: masteryResult.LG_final,
+      decayPerDay: masteryResult.decayPerDay,
     };
 
     data.quizAttempts.push(attempt);
@@ -3803,27 +4415,39 @@ async function apiHandler(req, res, parsedUrl) {
         gainPct: masteryResult.gainPct,
         decay: masteryResult.decay,
         decayRatePct: masteryResult.decayRatePct,
+        mastery_after_review: masteryResult.newMasteryPct,
+        decayPerDay: masteryResult.decayPerDay,
+        lastReviewedAt: masteryResult.lastReviewedAt,
+        nextReviewAt: masteryResult.nextReviewAt,
+        FES_session: masteryResult.FES_session,
+        LG_final: masteryResult.LG_final,
         difficultyPlan: masteryResult.difficultyPlan,
       },
     });
   }
 
   if (req.method === 'GET' && pathname === '/api/quizzes/due') {
+    const topN = clamp(Number(parsedUrl.searchParams.get('topN') || 20), 1, 100);
+    const threshold = clamp(Number(parsedUrl.searchParams.get('threshold') || REVIEW_THRESHOLD), 0, 100);
+    const nowAt = nowIso();
+    const priorities = computeReviewPriorities(data, { topN: 300, threshold, nowIso: nowAt });
     const due = [];
-    const now = new Date();
-    for (const [moduleName, mod] of Object.entries(data.modules)) {
-      for (const topic of Object.values(mod.topics)) {
-        const retryDueCount = dueRetryQueueForTopic(data, moduleName, topic.topicName, now.toISOString()).length;
-        const topicDue = new Date(topic.nextReviewAt) <= now;
-        if (topicDue || retryDueCount > 0) {
-          due.push({
-            moduleName,
-            topicName: topic.topicName,
-            type: retryDueCount > 0 ? 'spaced-repetition-retry' : 'spaced-repetition',
-          });
-        }
-      }
+
+    for (const item of priorities) {
+      const retryDueCount = dueRetryQueueForTopic(data, item.moduleName, item.topicName, nowAt).length;
+      const topicDue = new Date(item.nextReviewAt) <= new Date(nowAt);
+      if (!topicDue && retryDueCount <= 0 && item.priority <= 0) continue;
+      due.push({
+        moduleName: item.moduleName,
+        topicName: item.topicName,
+        type: retryDueCount > 0 ? 'spaced-repetition-retry' : 'spaced-repetition',
+        priority: item.priority,
+        masteryToday: item.masteryToday,
+        nextReviewAt: item.nextReviewAt,
+      });
+      if (due.length >= topN) break;
     }
+
     return send(res, 200, { due });
   }
 

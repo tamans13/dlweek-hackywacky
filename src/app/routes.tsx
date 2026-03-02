@@ -59,6 +59,10 @@ export const router = createBrowserRouter([
         const { default: TopicDetail } = await import("./pages/TopicDetail");
         return { Component: TopicDetail };
       }},
+      { path: "modules/:moduleId/topics/:topicId/spaced-review", lazy: async () => {
+        const { default: SpacedReviewSession } = await import("./pages/SpacedReviewSession");
+        return { Component: SpacedReviewSession };
+      }},
       { path: "modules/:moduleId/topics/:topicId/quizzes/:quizId", lazy: async () => {
         const { default: TopicQuizSession } = await import("./pages/TopicQuizSession");
         return { Component: TopicQuizSession };

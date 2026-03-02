@@ -13,6 +13,15 @@ const APP_SOURCE = "brainosaur-webapp";
 const EXT_SOURCE = "brainosaur-extension";
 
 let overlayElement = null;
+let pollingTimer = null;
+
+function extensionContextValid() {
+  try {
+    return Boolean(chrome && chrome.runtime && chrome.runtime.id);
+  } catch {
+    return false;
+  }
+}
 
 function isDistractionUrl(url) {
   const lower = String(url || "").toLowerCase();
@@ -40,6 +49,16 @@ function closeOverlay() {
 
 function createOverlay() {
   if (overlayElement) return;
+  if (!extensionContextValid()) return;
+
+  const dinoVideoUrl = chrome.runtime.getURL("crying-dino.mp4");
+  const dinoVideoHtml = `
+    <div class="brainosaur-mascot-wrap" aria-hidden="true">
+      <video class="brainosaur-dino-video" autoplay loop muted playsinline>
+        <source src="${dinoVideoUrl}" type="video/mp4" />
+      </video>
+    </div>
+  `;
 
   const overlay = document.createElement("div");
   overlay.id = "brainosaur-distraction-overlay";
@@ -50,13 +69,7 @@ function createOverlay() {
   const step1 = document.createElement("div");
   step1.id = "brainosaur-step-1";
   step1.innerHTML = `
-    <div class="brainosaur-mascot-wrap" aria-hidden="true">
-      <div class="brainosaur-dino-face">🦖</div>
-      <div class="brainosaur-tears">
-        <span class="brainosaur-tear"></span>
-        <span class="brainosaur-tear"></span>
-      </div>
-    </div>
+    ${dinoVideoHtml}
     <h1 class="brainosaur-title">Hold up, Brainosaur!</h1>
     <p class="brainosaur-subtitle">You opened a distracting site. Are you here to study?</p>
     <div class="brainosaur-button-group">
@@ -69,14 +82,8 @@ function createOverlay() {
   step2.id = "brainosaur-step-2";
   step2.className = "brainosaur-hidden";
   step2.innerHTML = `
-    <div class="brainosaur-mascot-wrap" aria-hidden="true">
-      <div class="brainosaur-dino-face">🦖</div>
-      <div class="brainosaur-tears">
-        <span class="brainosaur-tear"></span>
-        <span class="brainosaur-tear"></span>
-      </div>
-    </div>
-    <h1 class="brainosaur-title">Do you not want to study anymore?</h1>
+    ${dinoVideoHtml}
+    <h1 class="brainosaur-title">Do you still want to study?</h1>
     <div class="brainosaur-button-group">
       <button class="brainosaur-btn brainosaur-btn-primary" id="brainosaur-plan-yes">Yes</button>
       <button class="brainosaur-btn brainosaur-btn-secondary" id="brainosaur-plan-no">No</button>
@@ -90,7 +97,11 @@ function createOverlay() {
   setTimeout(() => overlay.classList.add("visible"), 10);
 
   document.getElementById("brainosaur-study-yes").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "allow_distraction_for_study", url: window.location.href });
+    if (extensionContextValid()) {
+      try {
+        chrome.runtime.sendMessage({ action: "allow_distraction_for_study", url: window.location.href });
+      } catch {}
+    }
     closeOverlay();
   });
 
@@ -100,12 +111,20 @@ function createOverlay() {
   });
 
   document.getElementById("brainosaur-plan-yes").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "terminate_session", reason: "user_done_studying" });
+    if (extensionContextValid()) {
+      try {
+        chrome.runtime.sendMessage({ action: "close_this_tab" });
+      } catch {}
+    }
     closeOverlay();
   });
 
   document.getElementById("brainosaur-plan-no").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "close_this_tab" });
+    if (extensionContextValid()) {
+      try {
+        chrome.runtime.sendMessage({ action: "terminate_session", reason: "user_done_studying" });
+      } catch {}
+    }
     closeOverlay();
   });
 
@@ -113,56 +132,79 @@ function createOverlay() {
 }
 
 function checkAndShowPrompt() {
+  if (!extensionContextValid()) {
+    closeOverlay();
+    if (pollingTimer) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
+    return;
+  }
+
   if (!isDistractionUrl(window.location.href)) {
     closeOverlay();
     return;
   }
 
-  chrome.storage.local.get(TRACKING_STORAGE_KEY, (result) => {
-    const saved = result?.[TRACKING_STORAGE_KEY];
-    const trackingEnabled = !!saved?.enabled;
-    if (!trackingEnabled) {
-      closeOverlay();
-      return;
-    }
-    chrome.runtime.sendMessage({ action: "check_current_url", url: window.location.href }, (response) => {
-      const err = chrome.runtime?.lastError;
-      if (err) {
-        // If worker isn't immediately available, still show while tracking is enabled.
-        createOverlay();
+  try {
+    chrome.storage.local.get(TRACKING_STORAGE_KEY, (result) => {
+      if (!extensionContextValid()) {
+        closeOverlay();
         return;
       }
-      if (response?.shouldPrompt) createOverlay();
-      else closeOverlay();
+      const saved = result?.[TRACKING_STORAGE_KEY];
+      const trackingEnabled = !!saved?.enabled;
+      if (!trackingEnabled) {
+        closeOverlay();
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage({ action: "check_current_url", url: window.location.href }, (response) => {
+          const err = chrome.runtime?.lastError;
+          if (err) {
+            // If worker isn't immediately available, still show while tracking is enabled.
+            createOverlay();
+            return;
+          }
+          if (response?.shouldPrompt) createOverlay();
+          else closeOverlay();
+        });
+      } catch {
+        closeOverlay();
+      }
     });
-  });
+  } catch {
+    closeOverlay();
+  }
 }
 
 // Polling fallback: if message-driven prompt misses, this still shows overlay.
-setInterval(() => {
+pollingTimer = setInterval(() => {
   if (!document.hidden) checkAndShowPrompt();
 }, 1500);
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-  if (request.action === "show_prompt") {
-    createOverlay();
-    sendResponse({ success: true });
-    return;
-  }
+if (extensionContextValid()) {
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request.action === "show_prompt") {
+      createOverlay();
+      sendResponse({ success: true });
+      return;
+    }
 
-  if (request.action === "tracking_enabled" || request.action === "tracking_disabled") {
-    closeOverlay();
-    sendResponse({ success: true });
-    return;
-  }
+    if (request.action === "tracking_enabled" || request.action === "tracking_disabled") {
+      closeOverlay();
+      sendResponse({ success: true });
+      return;
+    }
 
-  // Forward extension payloads to the page app.
-  if (request?.source === EXT_SOURCE && request?.payload) {
-    window.postMessage({ source: EXT_SOURCE, payload: request.payload }, window.location.origin);
-    sendResponse({ ok: true });
-    return;
-  }
-});
+    // Forward extension payloads to the page app.
+    if (request?.source === EXT_SOURCE && request?.payload) {
+      window.postMessage({ source: EXT_SOURCE, payload: request.payload }, window.location.origin);
+      sendResponse({ ok: true });
+      return;
+    }
+  });
+}
 
 // Fallback bridge: web app -> extension runtime
 window.addEventListener("message", (event) => {
@@ -170,19 +212,22 @@ window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.source !== APP_SOURCE || !data.requestId || !data.payload) return;
 
-  chrome.runtime.sendMessage(data.payload, (response) => {
-    const error = chrome.runtime.lastError?.message || null;
-    window.postMessage(
-      {
-        source: EXT_SOURCE,
-        bridge: true,
-        requestId: data.requestId,
-        response: response || null,
-        error
-      },
-      window.location.origin
-    );
-  });
+  if (!extensionContextValid()) return;
+  try {
+    chrome.runtime.sendMessage(data.payload, (response) => {
+      const error = chrome.runtime.lastError?.message || null;
+      window.postMessage(
+        {
+          source: EXT_SOURCE,
+          bridge: true,
+          requestId: data.requestId,
+          response: response || null,
+          error
+        },
+        window.location.origin
+      );
+    });
+  } catch {}
 });
 
 checkAndShowPrompt();

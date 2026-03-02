@@ -289,6 +289,11 @@ export default function TopicDetail() {
     navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/quizzes/${encodeURIComponent(quiz.id)}`);
   };
 
+  const handleStartSpacedReview = () => {
+    if (!moduleName || !topicName) return;
+    navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/spaced-review`);
+  };
+
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading topic...</div>;
   }
@@ -423,6 +428,9 @@ export default function TopicDetail() {
             </div>
 
             <div className="flex items-end gap-3 mb-4">
+              <Button variant="outline" onClick={handleStartSpacedReview} disabled={!documents.length}>
+                15-min Spaced Review
+              </Button>
               <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length || !hasStartedTopicSession}>
                 {generatingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
                 {generatingQuiz ? "Generating..." : "Generate Quiz"}
