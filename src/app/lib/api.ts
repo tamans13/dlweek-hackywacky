@@ -219,6 +219,25 @@ export interface GeneratedQuizReviewItem {
   explanation: string;
 }
 
+export interface SpacedReviewFlashcard {
+  id: string;
+  front: string;
+  back: string;
+}
+
+export interface SpacedReviewRun {
+  id: string;
+  moduleName: string;
+  topicName: string;
+  startedAt: string;
+  durationMinutes: number;
+  flashcards: SpacedReviewFlashcard[];
+  miniQuiz: {
+    title: string;
+    questions: GeneratedQuizQuestion[];
+  };
+}
+
 const SESSION_STORAGE_KEY = "brainosaur_auth_session";
 
 function isBrowser() {
@@ -548,6 +567,54 @@ export function submitQuiz(payload: {
 
 export function fetchDueQuizzes() {
   return request<{ due: Array<{ moduleName: string; topicName: string; type: string }> }>("/api/quizzes/due");
+}
+
+export function startSpacedReviewSession(payload: {
+  moduleName: string;
+  topicName: string;
+}) {
+  return request<{ ok: true; reviewRun: SpacedReviewRun }>("/api/topic/spaced-review/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function completeSpacedReviewSession(payload: {
+  runId: string;
+  flashcardsReviewed: Array<{ flashcardId: string; rating: "again" | "hard" | "good" | "easy" }>;
+  answers: number[];
+  sessionTimeMinutes?: number;
+  focusedTimeMinutes?: number;
+  distractionEvents?: number;
+  activeInteractionTimeMinutes?: number;
+}) {
+  return request<{
+    ok: true;
+    runId: string;
+    review: GeneratedQuizReviewItem[];
+    result: {
+      score: number;
+      total: number;
+      percent: number;
+      sessionScore: number;
+      quizScore: number;
+    };
+    masteryUpdate: {
+      oldMastery: number;
+      newMastery: number;
+      oldMasteryPct: number;
+      newMasteryPct: number;
+      mastery_after_review: number;
+      decayPerDay: number;
+      lastReviewedAt: string;
+      nextReviewAt: string;
+      FES_session: number;
+      LG_final: number;
+    };
+  }>("/api/topic/spaced-review/complete", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function updateExamPlan(payload: {
