@@ -90,6 +90,7 @@ function createOverlay() {
   setTimeout(() => overlay.classList.add("visible"), 10);
 
   document.getElementById("brainosaur-study-yes").addEventListener("click", () => {
+    chrome.runtime.sendMessage({ action: "allow_distraction_for_study", url: window.location.href });
     closeOverlay();
   });
 
@@ -131,7 +132,7 @@ function checkAndShowPrompt() {
         createOverlay();
         return;
       }
-      if (response?.isDistraction) createOverlay();
+      if (response?.shouldPrompt) createOverlay();
       else closeOverlay();
     });
   });

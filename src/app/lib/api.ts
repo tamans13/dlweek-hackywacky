@@ -114,12 +114,31 @@ export interface ReadinessItem {
   score: number;
   reason: string;
   examPlan: ExamPlan | null;
+  prediction?: {
+    modelType: string;
+    riskBand: "low" | "medium" | "high";
+    projectedReadiness: number;
+    confidence: number;
+    daysToExam: number;
+    untestedTopicCount: number;
+    dailyTopicTarget: number;
+    priorityTopics: Array<{
+      topicName: string;
+      masteryPct: number;
+    }>;
+    explanation: string;
+  };
 }
 
 export interface InsightPayload {
   moduleName: string;
   summary: string;
   actions: string[];
+}
+
+export interface LearningChatMessage {
+  role: "user" | "assistant";
+  content: string;
 }
 
 export interface OnboardingPersonaTechnique {
@@ -549,6 +568,16 @@ export function generateInsights(moduleName?: string) {
   return request<{ ok: true; insights: InsightPayload; aiEnabled: boolean }>("/api/insights/generate", {
     method: "POST",
     body: JSON.stringify(moduleName ? { moduleName } : {}),
+  });
+}
+
+export function sendLearningChat(payload: {
+  message: string;
+  history?: LearningChatMessage[];
+}) {
+  return request<{ ok: true; reply: string; aiEnabled: boolean }>("/api/chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

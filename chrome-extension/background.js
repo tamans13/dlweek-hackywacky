@@ -30,6 +30,7 @@ const PROMPT_COOLDOWN_MS = 20_000;
 
 const DEBUG = true;
 const lastPromptAtByTabId = new Map();
+const allowedDistractionDomains = new Set();
 
 function storageGet(keys) {
   return new Promise((resolve) => {
@@ -105,6 +106,20 @@ function isDistraction(url) {
   return classifyUrl(url) === "distraction";
 }
 
+function domainFromUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isAllowedDistractionUrl(url) {
+  const domain = domainFromUrl(url);
+  if (!domain) return false;
+  return allowedDistractionDomains.has(domain);
+}
+
 function isBrainosaurWebAppUrl(url) {
   if (!url) return false;
   if (currentAppOrigin && url.startsWith(currentAppOrigin)) return true;
@@ -141,6 +156,7 @@ function resetSessionState() {
   activeUrl = null;
   activeSinceMs = Date.now();
   lastPromptAtByTabId.clear();
+  allowedDistractionDomains.clear();
 }
 
 function canPrompt(tabId) {
@@ -159,6 +175,13 @@ async function loadTrackingState() {
       trackingEnabled = !!saved.enabled;
       currentSessionId = saved.sessionId || null;
       currentAppOrigin = saved.appOrigin || null;
+      allowedDistractionDomains.clear();
+      if (Array.isArray(saved.allowedDomains)) {
+        for (const domain of saved.allowedDomains) {
+          const normalized = String(domain || "").trim().toLowerCase();
+          if (normalized) allowedDistractionDomains.add(normalized);
+        }
+      }
       return;
     }
   } catch (e) {
@@ -167,6 +190,7 @@ async function loadTrackingState() {
   trackingEnabled = false;
   currentSessionId = null;
   currentAppOrigin = null;
+  allowedDistractionDomains.clear();
 }
 
 function ensureStateLoaded() {
@@ -182,7 +206,8 @@ async function persistTrackingState() {
       [TRACKING_STORAGE_KEY]: {
         enabled: trackingEnabled,
         sessionId: currentSessionId,
-        appOrigin: currentAppOrigin
+        appOrigin: currentAppOrigin,
+        allowedDomains: Array.from(allowedDistractionDomains)
       }
     });
   } catch (e) {
@@ -359,7 +384,7 @@ async function handleActiveContextChange(tabId, url) {
 
   // Show the blue-screen prompt every time the user opens/switches to a distracting site
   // during an active study session.
-  if (category === "distraction" && canPrompt(tabId)) {
+  if (category === "distraction" && !isAllowedDistractionUrl(url) && canPrompt(tabId)) {
     await showPromptOnTab(tabId, url);
   }
 }
@@ -388,7 +413,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
       if (request?.action === "check_current_url") {
-        sendResponse({ isDistraction: trackingEnabled && isDistraction(request.url) });
+        const url = String(request.url || "");
+        sendResponse({
+          isDistraction: trackingEnabled && isDistraction(url),
+          shouldPrompt: trackingEnabled && isDistraction(url) && !isAllowedDistractionUrl(url)
+        });
+        return;
+      }
+
+      if (request?.action === "allow_distraction_for_study") {
+        const url = String(request.url || sender?.tab?.url || "");
+        const domain = domainFromUrl(url);
+        if (trackingEnabled && domain && isDistraction(url)) {
+          allowedDistractionDomains.add(domain);
+          await persistTrackingState();
+        }
+        sendResponse({ ok: true, allowed: Boolean(domain) });
         return;
       }
 
