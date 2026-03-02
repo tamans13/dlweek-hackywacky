@@ -140,6 +140,25 @@ export interface InsightPayload {
 export interface LearningChatMessage {
   role: "user" | "assistant";
   content: string;
+  id?: string;
+  at?: string;
+}
+
+export interface ChatSessionMeta {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  preview: string;
+  messageCount: number;
+}
+
+export interface ChatProactiveUpdate {
+  id: string;
+  severity: "high" | "medium" | "low" | string;
+  title: string;
+  message: string;
+  moduleName?: string;
 }
 
 export interface OnboardingPersonaTechnique {
@@ -642,12 +661,36 @@ export function generateInsights(moduleName?: string) {
 
 export function sendLearningChat(payload: {
   message: string;
+  sessionId?: string;
   history?: LearningChatMessage[];
 }) {
-  return request<{ ok: true; reply: string; aiEnabled: boolean }>("/api/chat", {
+  return request<{
+    ok: true;
+    reply: string;
+    sessionId: string;
+    session: ChatSessionMeta;
+    proactiveUpdates: ChatProactiveUpdate[];
+    sourceHints: Array<{ moduleName: string; topicName: string; fileName: string }>;
+    aiEnabled: boolean;
+  }>("/api/chat", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function fetchChatSessions() {
+  return request<{ sessions: ChatSessionMeta[]; proactiveUpdates: ChatProactiveUpdate[] }>("/api/chat/sessions");
+}
+
+export function createChatSession(title?: string) {
+  return request<{ ok: true; session: ChatSessionMeta & { messages: LearningChatMessage[] } }>("/api/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify(title ? { title } : {}),
+  });
+}
+
+export function fetchChatSession(sessionId: string) {
+  return request<{ session: ChatSessionMeta & { messages: LearningChatMessage[] } }>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`);
 }
 
 export function generateOnboardingPersona(payload: {
