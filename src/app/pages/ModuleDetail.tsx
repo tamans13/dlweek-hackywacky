@@ -4,7 +4,9 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
-import { ArrowLeft, Clock, CheckCircle2, Calendar, Plus, Upload } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import { Checkbox } from "../components/ui/checkbox";
+import { ArrowLeft, Clock, CheckCircle2, Calendar, Plus, Upload, ChevronDown, X } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { addTopic } from "../lib/api";
@@ -67,18 +69,26 @@ export default function ModuleDetail() {
   const [showAddExamDialog, setShowAddExamDialog] = useState(false);
   const [showAddTopicDialog, setShowAddTopicDialog] = useState(false);
   const [newTopicName, setNewTopicName] = useState("");
+  const [examName, setExamName] = useState(examPlan?.examName || "");
   const [examDate, setExamDate] = useState(examPlan?.examDate || "");
-  const [totalTopics, setTotalTopics] = useState(examPlan?.totalTopics?.toString() || "");
-  const [topicsCovered, setTopicsCovered] = useState(examPlan?.topicsCovered?.toString() || "");
+  const [topicsTested, setTopicsTested] = useState<string[]>(examPlan?.topicsTested || []);
+  const [topicsPopoverOpen, setTopicsPopoverOpen] = useState(false);
+  const [examError, setExamError] = useState<string | null>(null);
   const [uploadTopicName, setUploadTopicName] = useState("");
   const [uploadStatus, setUploadStatus] = useState<{ type: "error" | "success"; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    setExamName(examPlan?.examName || "");
     setExamDate(examPlan?.examDate || "");
-    setTotalTopics(examPlan?.totalTopics?.toString() || "");
-    setTopicsCovered(examPlan?.topicsCovered?.toString() || "");
+    setTopicsTested(examPlan?.topicsTested || []);
+    setExamError(null);
   }, [examPlan]);
+
+  useEffect(() => {
+    const validTopicNames = new Set(topics.map((topic) => topic.name));
+    setTopicsTested((prev) => prev.filter((name) => validTopicNames.has(name)));
+  }, [topics]);
 
   const handleAddTopic = async () => {
     if (!moduleName || !newTopicName.trim()) return;
@@ -89,16 +99,31 @@ export default function ModuleDetail() {
   };
 
   const handleSaveExam = async () => {
-    if (!moduleName || !examDate) return;
+    if (!moduleName) return;
+    const trimmedExamName = examName.trim();
+    if (!trimmedExamName || !examDate || !topicsTested.length) {
+      setExamError("Please provide exam name, date, and at least one topic.");
+      return;
+    }
     await saveExamPlan({
       moduleName,
+      examName: trimmedExamName,
       examDate,
-      totalTopics: Number(totalTopics || topics.length),
-      topicsCovered: Number(topicsCovered || 0),
-      topicsTested: examPlan?.topicsTested || topics.map((topic) => topic.name),
+      topicsTested,
     });
+    setExamError(null);
     setShowAddExamDialog(false);
   };
+
+  const toggleExamTopic = (topicName: string, checked: boolean) => {
+    setTopicsTested((prev) => {
+      if (checked) return Array.from(new Set([...prev, topicName]));
+      return prev.filter((name) => name !== topicName);
+    });
+  };
+
+  const topicsLoading = loading && !topics.length;
+  const noTopicsFound = !topicsLoading && topics.length === 0;
 
   const handleDeleteModule = async () => {
     if (!state || !moduleName) return;
@@ -166,8 +191,7 @@ export default function ModuleDetail() {
   const fallbackReadiness =
     state && state.modules[moduleName]
       ? Math.round(
-          (topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.55 +
-            (Number(topicsCovered || 0) / Math.max(1, Number(totalTopics || topics.length))) * 100 * 0.35 +
+          (topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.9 +
             10,
         )
       : 0;
@@ -197,7 +221,9 @@ export default function ModuleDetail() {
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">
-                    {examPlan ? `${daysUntil(examPlan.examDate)} days until exam (${formatDate(examPlan.examDate)})` : "No exam date set"}
+                    {examPlan
+                      ? `${daysUntil(examPlan.examDate)} days until ${examPlan.examName || "exam"} (${formatDate(examPlan.examDate)})`
+                      : "No exam date set"}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -221,19 +247,91 @@ export default function ModuleDetail() {
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
+                    <Label>Exam Name</Label>
+                    <Input
+                      value={examName}
+                      onChange={(e) => setExamName(e.target.value)}
+                      placeholder="e.g., Economics CA1"
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label>Date</Label>
                     <Input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label>Total Topics</Label>
-                      <Input type="number" value={totalTopics} onChange={(e) => setTotalTopics(e.target.value)} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Topics Covered</Label>
-                      <Input type="number" value={topicsCovered} onChange={(e) => setTopicsCovered(e.target.value)} />
-                    </div>
+                  <div className="space-y-2">
+                    <Label>Topics Covered</Label>
+                    <Popover open={topicsPopoverOpen} onOpenChange={setTopicsPopoverOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-between font-normal min-h-10 h-auto"
+                          disabled={topicsLoading || noTopicsFound}
+                        >
+                          <span className="flex flex-wrap items-center gap-2 text-left">
+                            {!topicsTested.length && (
+                              <span className="text-muted-foreground">
+                                {topicsLoading ? "Loading topics..." : noTopicsFound ? "No topics found" : "Select topics"}
+                              </span>
+                            )}
+                            {topicsTested.map((topicName) => (
+                              <span
+                                key={topicName}
+                                className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/60 px-2 py-1 text-xs text-foreground"
+                              >
+                                <span>{topicName}</span>
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Remove ${topicName}`}
+                                  className="rounded-sm text-muted-foreground hover:text-foreground"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExamTopic(topicName, false);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      toggleExamTopic(topicName, false);
+                                    }
+                                  }}
+                                >
+                                  <X className="w-3 h-3" />
+                                </span>
+                              </span>
+                            ))}
+                          </span>
+                          <ChevronDown className="w-4 h-4 ml-2 text-muted-foreground flex-shrink-0" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-[320px] p-3">
+                        <div className="space-y-2 max-h-52 overflow-auto">
+                          {topicsLoading && <p className="text-sm text-muted-foreground">Loading topics...</p>}
+                          {noTopicsFound && <p className="text-sm text-muted-foreground">No topics found.</p>}
+                          {!topicsLoading &&
+                            topics.map((topic) => {
+                              const selected = topicsTested.includes(topic.name);
+                              return (
+                                <button
+                                  key={topic.id}
+                                  type="button"
+                                  className={`w-full flex items-center gap-2 text-sm rounded-md px-2 py-2 text-left transition-colors ${
+                                    selected ? "bg-primary/10 text-foreground" : "hover:bg-muted text-foreground"
+                                  }`}
+                                  onClick={() => toggleExamTopic(topic.name, !selected)}
+                                >
+                                  <Checkbox checked={selected} className="pointer-events-none" />
+                                  <span>{topic.name}</span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                   </div>
+                  {examError && (
+                    <p className="text-sm text-destructive">{examError}</p>
+                  )}
                   <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleSaveExam}>
                     Save Exam
                   </Button>

@@ -89,6 +89,7 @@ export interface TabEvent {
 }
 
 export interface ExamPlan {
+  examName?: string;
   examDate: string;
   totalTopics: number;
   topicsCovered: number;
@@ -551,9 +552,8 @@ export function fetchDueQuizzes() {
 
 export function updateExamPlan(payload: {
   moduleName: string;
+  examName?: string;
   examDate: string;
-  totalTopics: number;
-  topicsCovered: number;
   topicsTested: string[];
 }) {
   return request<{ ok: true; readiness: { score: number; reason: string } }>("/api/exam-plan", {

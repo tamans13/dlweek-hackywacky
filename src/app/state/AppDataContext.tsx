@@ -66,9 +66,8 @@ interface AppDataContextValue {
   }>;
   saveExamPlan: (payload: {
     moduleName: string;
+    examName?: string;
     examDate: string;
-    totalTopics: number;
-    topicsCovered: number;
     topicsTested: string[];
   }) => Promise<{ score: number; reason: string }>;
   uploadTopicFiles: (payload: { moduleName: string; topicName: string; files: File[] }) => Promise<void>;
@@ -232,7 +231,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveExamPlan = useCallback(
-    async (payload: { moduleName: string; examDate: string; totalTopics: number; topicsCovered: number; topicsTested: string[] }) => {
+    async (payload: { moduleName: string; examName?: string; examDate: string; topicsTested: string[] }) => {
       const result = await updateExamPlan(payload);
       await refresh();
       return result.readiness;
