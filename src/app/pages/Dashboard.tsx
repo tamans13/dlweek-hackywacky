@@ -13,6 +13,7 @@ interface CalendarEvent {
   id: string;
   dateKey: string;
   moduleName: string;
+  topicName?: string;
   type: CalendarEventType;
 }
 
@@ -56,6 +57,86 @@ function endOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0, 12);
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function average(values: number[]) {
+  if (!values.length) return 0;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function std(values: number[]) {
+  if (values.length < 2) return 0;
+  const mean = average(values);
+  const variance = average(values.map((v) => (v - mean) ** 2));
+  return Math.sqrt(variance);
+}
+
+function learnerAbilityScore(masteryValue: number, moduleFocusEfficiency: number, topicScores: number[]) {
+  const masteryPct = clamp(Math.round((Number(masteryValue || 0) / 10) * 100), 0, 100);
+  const focus = clamp(Number(moduleFocusEfficiency || 0) / 100, 0, 1);
+  const quizMean = clamp(average(topicScores) / 100, 0, 1);
+  const consistency = topicScores.length > 1 ? 1 - clamp(std(topicScores) / 35, 0, 0.7) : 0.55;
+
+  return clamp(
+    0.45 * (masteryPct / 100) +
+      0.25 * focus +
+      0.2 * quizMean +
+      0.1 * consistency,
+    0,
+    1,
+  );
+}
+
+function firstSpacingGapDays(masteryValue: number, ability: number) {
+  const masteryPct = clamp(Math.round((Number(masteryValue || 0) / 10) * 100), 0, 100);
+  const memoryStrengthDays = clamp(1.6 + masteryPct / 18 + ability * 6, 1.2, 30);
+  const targetRetention = clamp(0.82 - ability * 0.12, 0.68, 0.82);
+  const gap = Math.round(-memoryStrengthDays * Math.log(targetRetention));
+  return clamp(gap, 2, 14);
+}
+
+function nextSpacingGapDays(currentGapDays: number, ability: number, reviewCount: number, stepIndex: number) {
+  const maturity = clamp(Number(reviewCount || 0) / 12, 0, 1);
+  const growthFactor = 1.16 + ability * 0.2 + maturity * 0.22 + Math.min(stepIndex, 6) * 0.03;
+  const grown = currentGapDays * growthFactor;
+  const next = Math.ceil(grown);
+  return clamp(next, 2, 40);
+}
+
+function expandSpacedRepDates(
+  nextReviewAtIso: string,
+  masteryValue: number,
+  ability: number,
+  reviewCount: number,
+  rangeStart: Date,
+  rangeEnd: Date,
+) {
+  const results: string[] = [];
+  const start = new Date(`${dateKeyFromIso(nextReviewAtIso)}T12:00:00`);
+  if (Number.isNaN(start.getTime())) return results;
+
+  let cursor = new Date(start);
+  let gapDays = firstSpacingGapDays(masteryValue, ability);
+  let step = 0;
+
+  while (cursor < rangeStart) {
+    cursor = addDays(cursor, gapDays);
+    gapDays = nextSpacingGapDays(gapDays, ability, reviewCount, step);
+    step += 1;
+  }
+
+  while (cursor <= rangeEnd) {
+    results.push(dateKeyFromDate(cursor));
+    cursor = addDays(cursor, gapDays);
+    gapDays = nextSpacingGapDays(gapDays, ability, reviewCount, step);
+    step += 1;
+  }
+
+  return results;
+}
+
 export default function Dashboard() {
   const { state, loading, error } = useAppData();
   const [calendarView, setCalendarView] = useState<CalendarView>("month");
@@ -87,14 +168,42 @@ export default function Dashboard() {
 
   const calendarEvents = useMemo<CalendarEvent[]>(() => {
     if (!state) return [];
+    const rangeStart = startOfMonth(calendarCursor);
+    const rangeEnd = endOfMonth(calendarCursor);
     const events: CalendarEvent[] = [];
+
+    const attemptsByTopic = new Map<string, number[]>();
+    state.quizAttempts.forEach((attempt) => {
+      const key = `${attempt.moduleName}::${attempt.topicName}`;
+      if (!attemptsByTopic.has(key)) attemptsByTopic.set(key, []);
+      attemptsByTopic.get(key)!.push(Number(attempt.postScore || 0));
+    });
+
     Object.entries(state.modules).forEach(([moduleName, moduleState]) => {
       Object.values(moduleState.topics).forEach((topic) => {
-        events.push({
-          id: `spaced-${moduleName}-${topic.topicName}-${topic.nextReviewAt}`,
-          dateKey: dateKeyFromIso(topic.nextReviewAt),
-          moduleName,
-          type: "spacedRep",
+        const topicKey = `${moduleName}::${topic.topicName}`;
+        const topicScores = attemptsByTopic.get(topicKey) || [];
+        const ability = learnerAbilityScore(
+          topic.estimatedMasteryNow ?? topic.mastery,
+          moduleState.focusEfficiency || 0,
+          topicScores,
+        );
+        const scheduledDates = expandSpacedRepDates(
+          topic.nextReviewAt,
+          topic.estimatedMasteryNow ?? topic.mastery,
+          ability,
+          topic.history?.length || 0,
+          rangeStart,
+          rangeEnd,
+        );
+        scheduledDates.forEach((dateKey, index) => {
+          events.push({
+            id: `spaced-${moduleName}-${topic.topicName}-${dateKey}-${index}`,
+            dateKey,
+            moduleName,
+            topicName: topic.topicName,
+            type: "spacedRep",
+          });
         });
       });
     });
@@ -114,7 +223,7 @@ export default function Dashboard() {
       if (a.type !== b.type) return a.type === "exam" ? 1 : -1;
       return a.moduleName.localeCompare(b.moduleName);
     });
-  }, [state]);
+  }, [state, calendarCursor]);
 
   const eventsByDate = useMemo(() => {
     const mapped: Record<string, CalendarEvent[]> = {};
@@ -323,8 +432,9 @@ export default function Dashboard() {
                           key={event.id}
                           onClick={() => setSelectedDayKey(dateKey)}
                           className={`w-full text-left text-[11px] px-2 py-1 rounded ${eventClasses(event.type)}`}
+                          title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
                         >
-                          {event.moduleName}
+                          {event.type === "spacedRep" && event.topicName ? event.topicName : event.moduleName}
                         </button>
                       ))}
                       {overflowCount > 0 && (
@@ -357,8 +467,9 @@ export default function Dashboard() {
                           key={event.id}
                           onClick={() => setSelectedDayKey(dateKey)}
                           className={`w-full text-left text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}
+                          title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
                         >
-                          {event.moduleName}
+                          {event.type === "spacedRep" && event.topicName ? event.topicName : event.moduleName}
                         </button>
                       ))}
                       {overflowCount > 0 && (
@@ -385,8 +496,9 @@ export default function Dashboard() {
                     key={event.id}
                     onClick={() => setSelectedDayKey(dateKeyFromDate(calendarCursor))}
                     className={`w-full text-left text-sm px-3 py-2 rounded ${eventClasses(event.type)}`}
+                    title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
                   >
-                    {event.moduleName}
+                    {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : event.moduleName}
                   </button>
                 ))}
                 {!(eventsByDate[dateKeyFromDate(calendarCursor)] || []).length && <p className="text-sm text-muted-foreground">No events for this day.</p>}
@@ -414,7 +526,9 @@ export default function Dashboard() {
             {!activeDayEvents.length && <p className="text-sm text-muted-foreground">No events for this day.</p>}
             {activeDayEvents.map((event) => (
               <div key={event.id} className="flex items-center justify-between border border-border rounded-md px-3 py-2">
-                <span className="text-sm text-foreground">{event.moduleName}</span>
+                <span className="text-sm text-foreground">
+                  {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : event.moduleName}
+                </span>
                 <span className={`text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}>{event.type === "exam" ? "Exam" : "Spaced Rep"}</span>
               </div>
             ))}

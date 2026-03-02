@@ -38,11 +38,11 @@ export default function DashboardLayout() {
       <aside className="w-60 bg-card border-r border-border flex flex-col">
         <div className="p-5 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg overflow-hidden border border-border bg-primary/10">
+            <div className="w-14 h-14 rounded-xl overflow-hidden border border-border bg-primary/10">
               <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
             </div>
             <div>
-                  <h3 className="text-base font-medium text-foreground">Brainosaur</h3>
+                  <h3 className="text-lg font-medium text-foreground">Brainosaur</h3>
               <p className="text-xs text-muted-foreground">AI Learning Analytics</p>
             </div>
           </div>

@@ -34,8 +34,15 @@ export default function Login() {
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-card border border-border rounded-lg p-8 space-y-6">
         <div className="text-center space-y-3">
-          <div className="w-20 h-20 mx-auto rounded-2xl overflow-hidden border border-border">
-            <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
+          <div className="w-36 h-36 mx-auto rounded-2xl overflow-hidden bg-primary/10 border border-border">
+            <video
+              src="/Brainosaur.mp4"
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="w-full h-full object-cover"
+            />
           </div>
           <h1 className="text-3xl font-medium text-foreground">Welcome Back</h1>
           <p className="text-sm text-muted-foreground">Log in with your email and password.</p>

@@ -653,7 +653,7 @@ function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postS
   topic.lastInteractionAt = now;
   topic.lastQuizAt = now;
   topic.lastDecayAppliedAt = now;
-  topic.nextReviewAt = new Date(new Date(now).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+  topic.nextReviewAt = new Date(new Date(now).getTime() + reviewDaysForTopic(topic, moduleName, data, now) * 86400000).toISOString();
 
   const decay = decayRatePct / 10;
   const difficultyPlan = buildAdaptiveDifficultyPlan(oldMasteryPct, boundedPre, decayRatePct);
@@ -700,6 +700,59 @@ function reviewDays(mastery) {
   return 12;
 }
 
+function learnerAbilityForTopic(topic, moduleName, data) {
+  const masteryPct = masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery ?? 5);
+  const moduleFocus = clamp(Number(moduleState(data, moduleName).focusEfficiency || 0) / 100, 0, 1);
+  const attempts = data.quizAttempts
+    .filter((q) => q.moduleName === moduleName && q.topicName === topic.topicName)
+    .slice(-8);
+  const meanScore = attempts.length
+    ? attempts.reduce((sum, item) => sum + clamp(Number(item.postScore || 0), 0, 100), 0) / attempts.length
+    : masteryPct;
+  const consistency = attempts.length > 1
+    ? 1 - clamp(stdDev(attempts.map((x) => clamp(Number(x.postScore || 0), 0, 100))) / 35, 0, 0.7)
+    : 0.55;
+
+  return clamp(
+    0.45 * (masteryPct / 100)
+      + 0.25 * moduleFocus
+      + 0.2 * (meanScore / 100)
+      + 0.1 * consistency,
+    0,
+    1,
+  );
+}
+
+function reviewDaysForTopic(topic, moduleName, data, currentTimeIso) {
+  const at = currentTimeIso || nowIso();
+  const ability = learnerAbilityForTopic(topic, moduleName, data);
+  const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, at);
+  const masteryPct = masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery ?? 5);
+  const historyCount = Array.isArray(topic.history) ? topic.history.length : 0;
+  const daysIdle = daysBetween(topic.lastInteractionAt || topic.createdAt || at, at);
+
+  const memoryStrengthDays = clamp(
+    1.6
+      + masteryPct / 18
+      + ability * 6
+      - decayRatePct / 8,
+    1.2,
+    36,
+  );
+
+  // Higher-ability learners can keep longer intervals before the same retention threshold.
+  const targetRetention = clamp(0.82 - ability * 0.12, 0.68, 0.82);
+  const baseGapDays = clamp(Math.round(-memoryStrengthDays * Math.log(targetRetention)), 1, 18);
+
+  // Successful repeated reviews gradually widen spacing; long neglect pulls spacing tighter.
+  const maturityStretch = 1 + clamp(historyCount / 12, 0, 1.2) * 0.55;
+  const abilityStretch = 1 + ability * 0.35;
+  const neglectPenalty = 1 - clamp(daysIdle / 60, 0, 0.35);
+
+  const adaptiveGap = Math.round(baseGapDays * maturityStretch * abilityStretch * neglectPenalty);
+  return clamp(adaptiveGap, 1, 45);
+}
+
 function stdDev(arr) {
   if (!arr.length) return 0;
   const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -714,6 +767,148 @@ function scoreSlope(arr) {
   const a = first.reduce((x, y) => x + y, 0) / first.length;
   const b = second.reduce((x, y) => x + y, 0) / second.length;
   return b - a;
+}
+
+function classifyBehaviorType(metrics) {
+  if (metrics.distractionRatio > 0.32) return 'Distractible Explorer';
+  if (metrics.sessionIntensity > 0.78 && metrics.overworkLoad > 0.45) return 'Sprint-and-Crash';
+  if (metrics.stabilityRisk > 0.55 && metrics.accuracyDropRisk > 0.4) return 'Overloaded Striver';
+  if (metrics.focusRatio >= 0.65 && metrics.stabilityRisk < 0.35) return 'Steady Deep Learner';
+  return 'Adaptive Mixed Learner';
+}
+
+function buildRecoveryPlan(behaviorType, burnoutRisk, weakestTopics) {
+  const lightReviewLine = weakestTopics.length
+    ? `Do a light 20-minute note skim on ${weakestTopics.slice(0, 2).join(' and ')} (no timed quiz).`
+    : 'Do a light 20-minute note skim on your weakest topic (no timed quiz).';
+
+  if (burnoutRisk >= 71) {
+    if (behaviorType === 'Sprint-and-Crash') {
+      return [
+        lightReviewLine,
+        'Switch to 25/10 blocks for the next 2 days and cap total study time at 2.5 hours/day.',
+        'Insert one 24-hour recovery gap before the next hard quiz set.',
+      ];
+    }
+    if (behaviorType === 'Distractible Explorer') {
+      return [
+        lightReviewLine,
+        'Use 20/5 focus blocks with site blocking and limit to 3 blocks today.',
+        'Take a 30-minute walk/off-screen break before any further studying.',
+      ];
+    }
+    return [
+      lightReviewLine,
+      'Reduce quiz intensity for 48 hours: concept checks only, no full mocks.',
+      'Increase rest interval between sessions to at least 90 minutes.',
+    ];
+  }
+
+  if (burnoutRisk >= 41) {
+    if (behaviorType === 'Steady Deep Learner') {
+      return [
+        lightReviewLine,
+        'Keep regular pace but add one extra 15-minute recovery break every 90 minutes.',
+        'Use one medium-difficulty quiz only after a full review block.',
+      ];
+    }
+    return [
+      lightReviewLine,
+      'Use 40/10 blocks and avoid back-to-back hard quizzes in the same day.',
+      'Schedule one short recovery activity after each two study blocks.',
+    ];
+  }
+
+  return [
+    lightReviewLine,
+    'Maintain current pace with one short break every 60-75 minutes.',
+    'Keep one mixed-difficulty quiz daily to sustain momentum.',
+  ];
+}
+
+function computeBurnoutSignals(moduleName, data, moduleSessions, recentAttempts, tabEvents) {
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
+  const recentSessions = moduleSessions.filter((s) => new Date(s.startAt) >= sevenDaysAgo);
+  const recentAttempts7d = recentAttempts.filter((a) => new Date(a.submittedAt) >= sevenDaysAgo);
+
+  let recentMinutes = 0;
+  for (const s of recentSessions) {
+    const mins = Math.max(0, (new Date(s.endAt).getTime() - new Date(s.startAt).getTime()) / 60000);
+    recentMinutes += mins;
+  }
+
+  const avgSessionMinutes = recentSessions.length ? recentMinutes / recentSessions.length : 0;
+  const dailyMinutes = recentMinutes / 7;
+
+  const scores = recentAttempts.map((x) => Number(x.postScore || 0));
+  const firstHalf = scores.slice(0, Math.floor(scores.length / 2));
+  const secondHalf = scores.slice(Math.floor(scores.length / 2));
+  const firstAvg = firstHalf.length ? firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length : 0;
+  const secondAvg = secondHalf.length ? secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length : 0;
+  const accuracyDrop = Math.max(0, firstAvg - secondAvg);
+  const volatility = stdDev(scores);
+
+  const distraction = tabEvents.filter((e) => e.eventType === 'distraction').length;
+  const focused = tabEvents.filter((e) => e.eventType === 'learning').length;
+  const help = tabEvents.filter((e) => e.eventType === 'help').length;
+  const totalSignalEvents = Math.max(1, focused + distraction + help);
+  const distractionRatio = distraction / totalSignalEvents;
+  const focusRatio = focused / totalSignalEvents;
+
+  const sessionsPerDay = recentSessions.length / 7;
+  const quizDensity = recentAttempts7d.length / 7;
+
+  const accuracyDropRisk = clamp(accuracyDrop / 18, 0, 1);
+  const stabilityRisk = clamp(volatility / 22, 0, 1);
+  const overworkLoad = clamp((dailyMinutes - 120) / 180, 0, 1) * 0.7 + clamp((sessionsPerDay - 2) / 2, 0, 1) * 0.3;
+  const distractionRisk = clamp(distractionRatio / 0.42, 0, 1);
+  const intensityRisk = clamp((quizDensity - 2.5) / 2.5, 0, 1);
+  const sessionIntensity = clamp(avgSessionMinutes / 140, 0, 1);
+
+  const score = clamp(
+    (
+      accuracyDropRisk * 0.24 +
+      stabilityRisk * 0.18 +
+      overworkLoad * 0.2 +
+      distractionRisk * 0.14 +
+      intensityRisk * 0.14 +
+      sessionIntensity * 0.1
+    ) * 100,
+    0,
+    100,
+  );
+
+  const behaviorType = classifyBehaviorType({
+    distractionRatio,
+    sessionIntensity,
+    overworkLoad,
+    stabilityRisk,
+    accuracyDropRisk,
+    focusRatio,
+  });
+
+  const reasons = [];
+  if (accuracyDropRisk > 0.35) reasons.push('accuracy trend is falling');
+  if (stabilityRisk > 0.35) reasons.push('quiz performance is unstable');
+  if (overworkLoad > 0.35) reasons.push('study load is high');
+  if (intensityRisk > 0.35) reasons.push('quiz frequency is high');
+  if (distractionRisk > 0.35) reasons.push('distraction ratio is elevated');
+
+  return {
+    score: Math.round(score),
+    behaviorType,
+    reasons,
+    metrics: {
+      accuracyDrop,
+      volatility,
+      distractionRatio,
+      focusRatio,
+      dailyMinutes: Math.round(dailyMinutes),
+      sessionsPerDay: Number(sessionsPerDay.toFixed(2)),
+      quizDensityPerDay: Number(quizDensity.toFixed(2)),
+    },
+  };
 }
 
 function recomputeModuleScores(data, moduleName) {
@@ -732,14 +927,17 @@ function recomputeModuleScores(data, moduleName) {
   }
 
   const avgSession = moduleSessions.length ? totalSessionMinutes / moduleSessions.length : 0;
-  const unstablePerformance = recentAttempts.length > 4
-    ? stdDev(recentAttempts.map((x) => x.postScore)) / 25
-    : 0;
+  const burnout = computeBurnoutSignals(moduleName, data, moduleSessions, recentAttempts, tabEvents);
+  const weakestTopics = Object.values(mod.topics)
+    .slice()
+    .sort((a, b) => (a.estimatedMasteryNow ?? a.mastery) - (b.estimatedMasteryNow ?? b.mastery))
+    .slice(0, 3)
+    .map((t) => t.topicName);
 
-  const accuracySlope = scoreSlope(recentAttempts.map((x) => x.postScore));
-  const downtrendPenalty = accuracySlope < 0 ? Math.abs(accuracySlope) / 8 : 0;
-  const overworkPenalty = avgSession > 90 ? (avgSession - 90) / 60 : 0;
-  mod.burnoutRisk = clamp((overworkPenalty + unstablePerformance + downtrendPenalty) * 35, 0, 100);
+  mod.burnoutRisk = burnout.score;
+  mod.behaviorType = burnout.behaviorType;
+  mod.burnoutSignals = burnout;
+  mod.recoveryPlan = buildRecoveryPlan(burnout.behaviorType, burnout.score, weakestTopics);
 
   const distraction = tabEvents.filter((e) => e.eventType === 'distraction').length;
   const focused = tabEvents.filter((e) => e.eventType === 'learning').length;
@@ -774,7 +972,9 @@ function recomputeModuleScores(data, moduleName) {
     applyDailyMasteryDecay(topic, moduleName, data, now);
     const decay = retentionDecay(topic, moduleName, data, now);
     topic.estimatedMasteryNow = clamp(topic.mastery - decay, 1, 10);
-    topic.nextReviewAt = new Date(new Date(topic.lastInteractionAt).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+    topic.nextReviewAt = new Date(
+      new Date(topic.lastInteractionAt).getTime() + reviewDaysForTopic(topic, moduleName, data, now) * 86400000,
+    ).toISOString();
     masterySumPct += masteryToPercent(topic.estimatedMasteryNow);
     topicCount += 1;
   }
@@ -863,17 +1063,33 @@ function buildInsightsHeuristic(data, moduleName) {
       }
     : { score: 0, reason: 'No modules available yet.' };
   const label = moduleName || 'overall';
+  const behaviorType = moduleName
+    ? (moduleState(data, moduleName).behaviorType || 'Adaptive Mixed Learner')
+    : (() => {
+        const byType = {};
+        for (const name of targetModules) {
+          const t = moduleState(data, name).behaviorType || 'Adaptive Mixed Learner';
+          byType[t] = (byType[t] || 0) + 1;
+        }
+        return Object.entries(byType).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Adaptive Mixed Learner';
+      })();
+  const recoveryActions = moduleName
+    ? (moduleState(data, moduleName).recoveryPlan || buildRecoveryPlan(behaviorType, burnoutRisk, weakest))
+    : buildRecoveryPlan(behaviorType, burnoutRisk, weakest);
+  const burnoutReasons = moduleName
+    ? (moduleState(data, moduleName).burnoutSignals?.reasons || [])
+    : [];
 
   return {
     moduleName: label,
-    summary: `Prioritize weak topics first and move to spaced reviews. Burnout risk is ${burnoutRisk}%.`,
+    summary: `Burnout risk is ${burnoutRisk}% (${burnoutRisk <= 40 ? 'green' : burnoutRisk <= 70 ? 'yellow' : 'red'} zone). Behavior type: ${behaviorType}.${burnoutReasons.length ? ` Signals: ${burnoutReasons.join(', ')}.` : ''}`,
     actions: [
       `Spend your next 30 minutes on: ${weakest.join(', ') || 'set up topic tags first'}.`,
       due.length ? `Due for review now: ${due.join(', ')}.` : 'No overdue spaced-repetition reviews today.',
-      burnoutRisk > 65 ? 'Take 10-minute breaks every 40 minutes and reduce quiz volume temporarily.' : 'Keep your current pace; add one mixed-difficulty quiz per day.',
+      ...recoveryActions,
       `Focus efficiency is ${focusEfficiency}%. Keep distraction events under 15% of tab events.`,
       `Exam readiness: ${readiness.score}/100. ${readiness.reason}`,
-    ],
+    ].slice(0, 5),
   };
 }
 

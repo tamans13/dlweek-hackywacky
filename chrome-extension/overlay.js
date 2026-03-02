@@ -50,6 +50,13 @@ function createOverlay() {
   const step1 = document.createElement("div");
   step1.id = "brainosaur-step-1";
   step1.innerHTML = `
+    <div class="brainosaur-mascot-wrap" aria-hidden="true">
+      <div class="brainosaur-dino-face">🦖</div>
+      <div class="brainosaur-tears">
+        <span class="brainosaur-tear"></span>
+        <span class="brainosaur-tear"></span>
+      </div>
+    </div>
     <h1 class="brainosaur-title">Hold up, Brainosaur!</h1>
     <p class="brainosaur-subtitle">You opened a distracting site. Are you here to study?</p>
     <div class="brainosaur-button-group">
@@ -62,6 +69,13 @@ function createOverlay() {
   step2.id = "brainosaur-step-2";
   step2.className = "brainosaur-hidden";
   step2.innerHTML = `
+    <div class="brainosaur-mascot-wrap" aria-hidden="true">
+      <div class="brainosaur-dino-face">🦖</div>
+      <div class="brainosaur-tears">
+        <span class="brainosaur-tear"></span>
+        <span class="brainosaur-tear"></span>
+      </div>
+    </div>
     <h1 class="brainosaur-title">Do you not want to study anymore?</h1>
     <div class="brainosaur-button-group">
       <button class="brainosaur-btn brainosaur-btn-primary" id="brainosaur-plan-yes">Yes</button>
