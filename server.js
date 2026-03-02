@@ -101,6 +101,7 @@ const MAX_AI_QUIZ_QUESTIONS = 10;
 const SPACED_REVIEW_DURATION_MINUTES = 15;
 const SPACED_REVIEW_FLASHCARD_COUNT = 8;
 const SPACED_REVIEW_MINI_QUIZ_COUNT = 4;
+const MAX_TOPIC_WEAKNESS_ITEMS = 5;
 const PERSONA_MIN_DAYS_BETWEEN_UPDATES = clamp(Number(process.env.PERSONA_MIN_DAYS_BETWEEN_UPDATES || 4), 1, 30);
 const PERSONA_FORCE_REFRESH_DAYS = clamp(Number(process.env.PERSONA_FORCE_REFRESH_DAYS || 14), 3, 90);
 const GROUNDING_STOPWORDS = new Set([
@@ -4023,6 +4024,368 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
   return attachQuizDifficultyMetadata(merged);
 }
 
+function shortText(value, maxLen = 160) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 3)).trim()}...`;
+}
+
+function normalizeWeaknessBullet(text, maxLen = 220) {
+  const cleaned = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\-*]\s*/, '')
+    .trim();
+  if (!cleaned) return '';
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, maxLen - 3)).trim()}...`;
+}
+
+function buildTopicWeaknessesHeuristic(payload) {
+  const attemptCount = Number(payload?.attemptCount || 0);
+  const attemptsWithBreakdown = Number(payload?.attemptsWithBreakdown || 0);
+  const totalWrong = Number(payload?.totalWrong || 0);
+  const totalQuestionsSeen = Number(payload?.totalQuestionsSeen || 0);
+  const topSignals = Array.isArray(payload?.topSignals) ? payload.topSignals : [];
+  const trend = payload?.trend && typeof payload.trend === 'object' ? payload.trend : { direction: 'stable' };
+
+  if (!attemptCount) {
+    return ['No quiz attempts yet for this topic. Take a quiz to reveal specific weaknesses.'];
+  }
+  if (!attemptsWithBreakdown) {
+    return ['Specific weakness analysis appears after AI quiz attempts with per-question review data.'];
+  }
+  if (!totalWrong) {
+    return ['Recent quiz attempts show no incorrect answers for this topic. Keep spaced revision active to retain mastery.'];
+  }
+
+  const bullets = [];
+  for (const signal of topSignals.slice(0, 4)) {
+    const qText = shortText(signal.question, 110);
+    const correctOption = shortText(signal.correctOption, 80);
+    const commonWrongOption = shortText(signal.commonWrongOption, 80);
+    const wrongRatePct = clamp(Math.round(Number(signal.wrongRatePct || 0)), 0, 100);
+    const wrong = Math.max(0, Number(signal.wrong || 0));
+    const seen = Math.max(wrong, Number(signal.seen || 0));
+
+    if (signal.latestIsCorrect && wrong >= 2) {
+      bullets.push(
+        `Improving area: "${qText}" was missed ${wrong}/${seen} times but your latest attempt is now correct. Keep reinforcing this concept.`,
+      );
+      continue;
+    }
+
+    if (commonWrongOption && correctOption && commonWrongOption.toLowerCase() !== correctOption.toLowerCase()) {
+      bullets.push(
+        `Recurring confusion in "${qText}": ${wrongRatePct}% wrong (${wrong}/${seen}). You often choose "${commonWrongOption}" instead of "${correctOption}".`,
+      );
+      continue;
+    }
+
+    if (correctOption) {
+      bullets.push(
+        `Recurring weakness in "${qText}": ${wrongRatePct}% wrong (${wrong}/${seen}). Review why "${correctOption}" is correct.`,
+      );
+      continue;
+    }
+
+    bullets.push(
+      `Recurring weakness in "${qText}": ${wrongRatePct}% wrong (${wrong}/${seen}). Revisit this concept before your next quiz.`,
+    );
+  }
+
+  if (trend.direction === 'declining') {
+    bullets.push('Recent quiz performance is trending down. Do a short error-log review before your next attempt.');
+  } else if (trend.direction === 'improving') {
+    bullets.push('Recent performance trend is improving. Focus on unresolved mistakes to convert gains into stable mastery.');
+  }
+
+  if (!bullets.length) {
+    const wrongRate = totalQuestionsSeen > 0 ? Math.round((totalWrong / totalQuestionsSeen) * 100) : 0;
+    bullets.push(`Wrong-answer rate is ${wrongRate}%. Review recent incorrect questions and explanations before reattempting.`);
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  for (const line of bullets) {
+    const normalized = normalizeWeaknessBullet(line);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(normalized);
+    if (deduped.length >= MAX_TOPIC_WEAKNESS_ITEMS) break;
+  }
+  return deduped;
+}
+
+async function buildTopicWeaknessesWithOpenAI(payload, fallbackWeaknesses) {
+  const fallback = Array.isArray(fallbackWeaknesses) ? fallbackWeaknesses : [];
+  if (!OPENAI_API_KEY) return { source: 'heuristic', weaknesses: fallback };
+
+  const topSignals = Array.isArray(payload?.topSignals) ? payload.topSignals : [];
+  if (!topSignals.length) return { source: 'heuristic', weaknesses: fallback };
+
+  const trimmedPayload = {
+    moduleName: String(payload.moduleName || ''),
+    topicName: String(payload.topicName || ''),
+    attemptCount: Number(payload.attemptCount || 0),
+    attemptsWithBreakdown: Number(payload.attemptsWithBreakdown || 0),
+    totalQuestionsSeen: Number(payload.totalQuestionsSeen || 0),
+    totalWrong: Number(payload.totalWrong || 0),
+    trend: payload.trend || { direction: 'stable' },
+    signals: topSignals.slice(0, 8).map((signal) => ({
+      quizTitle: shortText(signal.quizTitle, 60),
+      question: shortText(signal.question, 180),
+      wrong: Number(signal.wrong || 0),
+      seen: Number(signal.seen || 0),
+      wrongRatePct: Number(signal.wrongRatePct || 0),
+      latestIsCorrect: Boolean(signal.latestIsCorrect),
+      commonWrongOption: shortText(signal.commonWrongOption, 100),
+      correctOption: shortText(signal.correctOption, 100),
+      explanation: shortText(signal.explanation, 160),
+    })),
+  };
+
+  const prompt = [
+    'You are an educational diagnostics assistant. Return strict JSON only.',
+    'Required JSON shape: { "weaknesses": [string] }',
+    `Return 2 to ${MAX_TOPIC_WEAKNESS_ITEMS} concise weakness bullets.`,
+    'Each bullet must be grounded in the provided wrong-answer evidence.',
+    'Reference concepts/patterns that are repeatedly wrong and note improvement where latest attempt became correct.',
+    'Include actionable wording, but keep each bullet short and specific.',
+    'Do not output markdown, numbering, or extra keys.',
+    JSON.stringify(trimmedPayload),
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) return { source: 'heuristic', weaknesses: fallback };
+    const result = await response.json();
+    const parsed = extractJsonObject(readResponseText(result));
+    const list = Array.isArray(parsed?.weaknesses) ? parsed.weaknesses : [];
+    const weaknesses = [];
+    const seen = new Set();
+    for (const item of list) {
+      const normalized = normalizeWeaknessBullet(item);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      weaknesses.push(normalized);
+      if (weaknesses.length >= MAX_TOPIC_WEAKNESS_ITEMS) break;
+    }
+    if (!weaknesses.length) return { source: 'heuristic', weaknesses: fallback };
+    return { source: 'ai', weaknesses };
+  } catch {
+    return { source: 'heuristic', weaknesses: fallback };
+  }
+}
+
+async function buildTopicWeaknessReport(userId, moduleName, topicName, data) {
+  const quizzes = await listTopicQuizzes(userId, moduleName, topicName, data);
+  const allAttempts = quizzes.flatMap((quiz) => (Array.isArray(quiz.attempts) ? quiz.attempts : []));
+  const attemptCount = allAttempts.length;
+
+  const signalByKey = new Map();
+  const attemptSeries = [];
+  let attemptsWithBreakdown = 0;
+  let totalQuestionsSeen = 0;
+  let totalWrong = 0;
+
+  for (const quiz of quizzes) {
+    const questionById = new Map(
+      (Array.isArray(quiz.questions) ? quiz.questions : []).map((question, index) => [
+        String(question?.id || `q_${index + 1}`),
+        question,
+      ]),
+    );
+
+    for (const attempt of Array.isArray(quiz.attempts) ? quiz.attempts : []) {
+      const submittedAt = String(attempt?.submittedAt || '');
+      const submittedAtMs = new Date(submittedAt).getTime();
+      const resultBreakdownRaw = Array.isArray(attempt?.resultBreakdown)
+        ? attempt.resultBreakdown
+        : Array.isArray(attempt?.result_breakdown)
+          ? attempt.result_breakdown
+          : [];
+
+      let attemptSeen = 0;
+      let attemptWrong = 0;
+
+      if (resultBreakdownRaw.length) {
+        attemptsWithBreakdown += 1;
+      }
+
+      for (const result of resultBreakdownRaw) {
+        const questionId = String(result?.questionId || '').trim();
+        const question = questionById.get(questionId) || null;
+        const questionText = String(question?.question || '').trim();
+        const fingerprint = questionFingerprint({ question: questionText });
+        const fallbackId = questionId || `index_${attemptSeen + 1}`;
+        const key = fingerprint || `${quiz.id}:${fallbackId}`;
+
+        const selectedIndex = Number.isInteger(result?.selectedIndex) ? Number(result.selectedIndex) : -1;
+        const correctIndex = Number.isInteger(result?.correctIndex)
+          ? Number(result.correctIndex)
+          : Number.isInteger(question?.answerIndex)
+            ? Number(question.answerIndex)
+            : -1;
+        const options = Array.isArray(question?.options) ? question.options.map((opt) => String(opt || '')) : [];
+        const selectedOption = selectedIndex >= 0 && selectedIndex < options.length ? options[selectedIndex] : '';
+        const correctOption = correctIndex >= 0 && correctIndex < options.length ? options[correctIndex] : '';
+        const isCorrect = Boolean(result?.isCorrect);
+
+        attemptSeen += 1;
+        totalQuestionsSeen += 1;
+        if (!isCorrect) {
+          attemptWrong += 1;
+          totalWrong += 1;
+        }
+
+        const existing = signalByKey.get(key) || {
+          key,
+          quizTitle: String(quiz.title || `${topicName} Quiz`),
+          question: questionText || `Question ${questionId || signalByKey.size + 1}`,
+          explanation: String(result?.explanation || question?.explanation || '').trim(),
+          seen: 0,
+          wrong: 0,
+          latestSubmittedAt: '',
+          latestSubmittedAtMs: Number.NEGATIVE_INFINITY,
+          latestIsCorrect: false,
+          correctOption: '',
+          wrongOptionCounts: {},
+        };
+
+        existing.seen += 1;
+        if (!isCorrect) existing.wrong += 1;
+        if (correctOption) existing.correctOption = correctOption;
+        if (selectedOption && !isCorrect) {
+          existing.wrongOptionCounts[selectedOption] = (existing.wrongOptionCounts[selectedOption] || 0) + 1;
+        }
+
+        if (Number.isFinite(submittedAtMs) && submittedAtMs >= existing.latestSubmittedAtMs) {
+          existing.latestSubmittedAtMs = submittedAtMs;
+          existing.latestSubmittedAt = submittedAt;
+          existing.latestIsCorrect = isCorrect;
+          if (questionText) existing.question = questionText;
+          if (String(result?.explanation || '').trim()) existing.explanation = String(result.explanation).trim();
+        }
+
+        signalByKey.set(key, existing);
+      }
+
+      if (attemptSeen > 0) {
+        const accuracyPct = clamp(Math.round(((attemptSeen - attemptWrong) / Math.max(1, attemptSeen)) * 100), 0, 100);
+        attemptSeries.push({
+          submittedAt,
+          submittedAtMs,
+          accuracyPct,
+        });
+      } else {
+        const rawScore = Number(attempt?.score);
+        const rawTotal = Number(attempt?.total);
+        if (Number.isFinite(rawScore) && Number.isFinite(rawTotal) && rawTotal > 0) {
+          const accuracyPct = clamp(Math.round((rawScore / rawTotal) * 100), 0, 100);
+          attemptSeries.push({
+            submittedAt,
+            submittedAtMs,
+            accuracyPct,
+          });
+        }
+      }
+    }
+  }
+
+  const topSignals = Array.from(signalByKey.values())
+    .filter((signal) => signal.wrong > 0)
+    .map((signal) => {
+      const wrongOptionEntries = Object.entries(signal.wrongOptionCounts || {}).sort((a, b) => b[1] - a[1]);
+      const commonWrongOption = wrongOptionEntries.length ? wrongOptionEntries[0][0] : '';
+      const wrongRatePct = signal.seen > 0 ? Math.round((signal.wrong / signal.seen) * 100) : 0;
+      return {
+        quizTitle: signal.quizTitle,
+        question: signal.question,
+        explanation: signal.explanation,
+        seen: signal.seen,
+        wrong: signal.wrong,
+        wrongRatePct,
+        latestIsCorrect: Boolean(signal.latestIsCorrect),
+        latestSubmittedAt: signal.latestSubmittedAt,
+        correctOption: signal.correctOption,
+        commonWrongOption,
+      };
+    })
+    .sort((a, b) => {
+      const unresolvedA = a.latestIsCorrect ? 0 : 1;
+      const unresolvedB = b.latestIsCorrect ? 0 : 1;
+      if (unresolvedB !== unresolvedA) return unresolvedB - unresolvedA;
+      if (b.wrongRatePct !== a.wrongRatePct) return b.wrongRatePct - a.wrongRatePct;
+      if (b.wrong !== a.wrong) return b.wrong - a.wrong;
+      return new Date(b.latestSubmittedAt || 0).getTime() - new Date(a.latestSubmittedAt || 0).getTime();
+    });
+
+  const sortedSeries = attemptSeries
+    .slice()
+    .filter((x) => Number.isFinite(x.submittedAtMs))
+    .sort((a, b) => a.submittedAtMs - b.submittedAtMs);
+  const recentWindowSize = Math.min(3, sortedSeries.length);
+  const recent = sortedSeries.slice(-recentWindowSize);
+  const previous = sortedSeries.slice(-(recentWindowSize * 2), -recentWindowSize);
+  const avg = (list) => list.length ? list.reduce((sum, item) => sum + Number(item.accuracyPct || 0), 0) / list.length : 0;
+  const hasComparableWindows = recent.length > 0 && previous.length > 0;
+  const recentAvgPct = Math.round(avg(recent));
+  const previousAvgPct = hasComparableWindows ? Math.round(avg(previous)) : recentAvgPct;
+  const deltaPct = hasComparableWindows ? (recentAvgPct - previousAvgPct) : 0;
+  const trend = {
+    direction: hasComparableWindows && deltaPct >= 8 ? 'improving' : hasComparableWindows && deltaPct <= -8 ? 'declining' : 'stable',
+    deltaPct,
+    recentAvgPct,
+    previousAvgPct,
+  };
+
+  const reportPayload = {
+    moduleName,
+    topicName,
+    attemptCount,
+    attemptsWithBreakdown,
+    totalQuestionsSeen,
+    totalWrong,
+    uniqueWrongQuestions: topSignals.length,
+    trend,
+    topSignals: topSignals.slice(0, 10),
+  };
+
+  const fallbackWeaknesses = buildTopicWeaknessesHeuristic(reportPayload);
+  const aiResult = await buildTopicWeaknessesWithOpenAI(reportPayload, fallbackWeaknesses);
+
+  return {
+    moduleName,
+    topicName,
+    weaknesses: aiResult.weaknesses,
+    source: aiResult.source,
+    basedOn: {
+      attemptCount,
+      attemptsWithBreakdown,
+      totalQuestionsSeen,
+      totalWrong,
+      uniqueWrongQuestions: topSignals.length,
+    },
+  };
+}
+
 async function deleteTopicQuizzes(userId, moduleName, topicName, data) {
   if (!SUPABASE_ENABLED) {
     const ids = new Set(
@@ -5225,6 +5588,15 @@ async function apiHandler(req, res, parsedUrl) {
     return send(res, 200, {
       quizzes: quizzes.map((quiz) => serializeQuizForClient(quiz, false)),
     });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/topic/weaknesses') {
+    const moduleName = String(parsedUrl.searchParams.get('moduleName') || '').trim();
+    const topicName = String(parsedUrl.searchParams.get('topicName') || '').trim();
+    if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName query params are required' });
+
+    const report = await buildTopicWeaknessReport(user.id, moduleName, topicName, data);
+    return send(res, 200, report);
   }
 
   if (req.method === 'POST' && pathname === '/api/quiz/submit') {

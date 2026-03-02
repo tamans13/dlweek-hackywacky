@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MessageCircle, Plus, Send, X } from "lucide-react";
+import { useNavigate } from "react-router";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
@@ -20,6 +21,7 @@ const WELCOME: LearningChatMessage = {
 const BURNOUT_AUTO_OPEN_THRESHOLD = 50;
 const BURNOUT_NUDGE_STORAGE_KEY = "brainosaur_dino_burnout_nudge";
 const BURNOUT_NUDGE_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const PERSONA_NUDGE_STORAGE_PREFIX = "brainosaur_dino_persona_nudge";
 
 function timeLabel(iso: string) {
   const t = new Date(iso).getTime();
@@ -29,6 +31,10 @@ function timeLabel(iso: string) {
 
 function buildBurnoutSupportMessage(moduleName: string, risk: number) {
   return `Hey, I noticed your burnout risk for ${moduleName} is ${risk}%. You have been working hard, so let's ease the pressure a little. Try this now: take 5 slow breaths, do a 10-minute off-screen break, then come back for one light 20-minute review block. I can help you plan a low-stress study session if you want.`;
+}
+
+function buildPersonaUpdateMessage(learningStyle: string) {
+  return `Your AI study persona has been updated to "${learningStyle}". Tap into My Profile to review your updated persona and the latest suggested study tips.`;
 }
 
 function shouldShowBurnoutNudge(moduleName: string, risk: number) {
@@ -50,6 +56,7 @@ function shouldShowBurnoutNudge(moduleName: string, risk: number) {
 }
 
 export default function DinoChat() {
+  const navigate = useNavigate();
   const { state } = useAppData();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -60,7 +67,8 @@ export default function DinoChat() {
   const [messages, setMessages] = useState<LearningChatMessage[]>([WELCOME]);
   const [proactiveUpdates, setProactiveUpdates] = useState<ChatProactiveUpdate[]>([]);
   const [burnoutSupportMessage, setBurnoutSupportMessage] = useState("");
-  const shouldHideWelcomeIntro = Boolean(burnoutSupportMessage);
+  const [personaSupportMessage, setPersonaSupportMessage] = useState("");
+  const shouldHideWelcomeIntro = Boolean(burnoutSupportMessage || personaSupportMessage);
 
   const highestBurnout = useMemo(() => {
     if (!state) return null;
@@ -145,6 +153,33 @@ export default function DinoChat() {
       // Ignore sessionStorage failures in private browsing contexts.
     }
   }, [highestBurnout]);
+
+  useEffect(() => {
+    const persona = state?.personaProfile;
+    if (!persona?.updatedAt) return;
+    if (persona.source && !String(persona.source).includes("evolution")) return;
+
+    const updatedAtMs = new Date(persona.updatedAt).getTime();
+    if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return;
+
+    const scope = String(state?.profile?.email || "anonymous");
+    const storageKey = `${PERSONA_NUDGE_STORAGE_PREFIX}.${scope}`;
+
+    try {
+      const previousNotifiedAt = Number(window.localStorage.getItem(storageKey) || "0");
+      if (!Number.isFinite(previousNotifiedAt) || previousNotifiedAt <= 0) {
+        window.localStorage.setItem(storageKey, String(updatedAtMs));
+        return;
+      }
+      if (updatedAtMs <= previousNotifiedAt) return;
+
+      window.localStorage.setItem(storageKey, String(updatedAtMs));
+      setPersonaSupportMessage(buildPersonaUpdateMessage(persona.learningStyle || "Updated Persona"));
+      setOpen(true);
+    } catch {
+      // Keep UI stable if localStorage is unavailable.
+    }
+  }, [state?.personaProfile, state?.profile?.email]);
 
   const handleCreateChat = async () => {
     setError("");
@@ -262,6 +297,18 @@ export default function DinoChat() {
               {burnoutSupportMessage && (
                 <div className="max-w-[88%] rounded-xl px-3 py-2 text-sm bg-primary/10 border border-primary/20 text-foreground">
                   {burnoutSupportMessage}
+                </div>
+              )}
+              {personaSupportMessage && (
+                <div className="max-w-[88%] rounded-xl px-3 py-2 text-sm bg-primary/10 border border-primary/20 text-foreground">
+                  <p>{personaSupportMessage}</p>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/dashboard/profile#study-techniques")}
+                    className="mt-2 text-xs font-medium text-primary hover:underline"
+                  >
+                    Go to My Profile
+                  </button>
                 </div>
               )}
               {messages

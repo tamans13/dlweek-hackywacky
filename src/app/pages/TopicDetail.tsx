@@ -23,6 +23,7 @@ import {
   TopicDocument,
   fetchTopicFiles,
   fetchTopicQuizzes,
+  fetchTopicWeaknesses,
   generateTopicQuiz,
   uploadTopicFiles,
 } from "../lib/api";
@@ -62,6 +63,8 @@ export default function TopicDetail() {
   const [resourceLoading, setResourceLoading] = useState(false);
   const [resourceError, setResourceError] = useState("");
   const [uploadMessage, setUploadMessage] = useState("");
+  const [weaknesses, setWeaknesses] = useState<string[]>(["No quiz attempts yet for this topic."]);
+  const [weaknessesLoading, setWeaknessesLoading] = useState(false);
 
   const [quizzes, setQuizzes] = useState<GeneratedQuiz[]>([]);
   const [generatingQuiz, setGeneratingQuiz] = useState(false);
@@ -104,21 +107,6 @@ export default function TopicDetail() {
     return historyPoints;
   }, [topic, attempts.length]);
 
-  const weaknesses = useMemo(() => {
-    if (!topic || !attempts.length) return ["No quiz attempts yet for this topic."];
-    const recentAttempts = attempts.slice(-5);
-    const lowConfidence = recentAttempts.filter((a) => a.confidence <= 2).length;
-    const dropCount = recentAttempts.filter((a) => a.postScore < a.preScore).length;
-    const aiUsage = recentAttempts.filter((a) => a.aiUsed).length;
-    const list: string[] = [];
-
-    if (lowConfidence >= 2) list.push("Confidence is consistently low. Review core definitions before timed practice.");
-    if (dropCount >= 1) list.push("Recent quizzes show regression; prioritize targeted remediation questions.");
-    if (aiUsage >= 3) list.push("High AI-assist ratio detected. Add one no-assistance quiz to validate true mastery.");
-    if (!list.length) list.push("No major weakness signal yet. Keep spaced repetition cadence.");
-    return list;
-  }, [attempts, topic]);
-
   const studySessions = useMemo(() => {
     if (!state || !moduleName || !topicName) return [];
     return state.studySessions
@@ -152,6 +140,11 @@ export default function TopicDetail() {
     if (!state || !moduleName || !topicName) return false;
     return state.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName && Boolean(session.endAt));
   }, [state, moduleName, topicName]);
+  const weaknessRefreshKey = useMemo(() => {
+    if (!attempts.length) return "none";
+    const lastAttempt = attempts[attempts.length - 1];
+    return `${attempts.length}:${lastAttempt.id}:${lastAttempt.submittedAt}:${lastAttempt.postScore}`;
+  }, [attempts]);
 
   useEffect(() => {
     if (!activeTopicSession) {
@@ -197,6 +190,34 @@ export default function TopicDetail() {
       cancelled = true;
     };
   }, [moduleName, topicName]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWeaknesses() {
+      if (!moduleName || !topicName) return;
+      setWeaknessesLoading(true);
+      try {
+        const report = await fetchTopicWeaknesses(moduleName, topicName);
+        if (cancelled) return;
+        const next = Array.isArray(report.weaknesses)
+          ? report.weaknesses.map((item) => String(item || "").trim()).filter(Boolean)
+          : [];
+        setWeaknesses(next.length ? next : ["No specific weakness signals yet for this topic."]);
+      } catch {
+        if (cancelled) return;
+        setWeaknesses(["Unable to load AI weakness analysis right now."]);
+      } finally {
+        if (!cancelled) setWeaknessesLoading(false);
+      }
+    }
+
+    void loadWeaknesses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleName, topicName, weaknessRefreshKey]);
 
   const handleStartTopicSession = async () => {
     if (!moduleName || !topicName) return;
@@ -562,12 +583,16 @@ export default function TopicDetail() {
               <h3 className="font-medium text-foreground text-lg">Specific Weaknesses</h3>
             </div>
             <div className="space-y-3">
-              {weaknesses.map((weakness, index) => (
-                <div key={index} className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20 rounded-lg">
-                  <div className="w-1.5 h-1.5 rounded-full bg-destructive mt-2 flex-shrink-0" />
-                  <p className="text-sm text-foreground">{weakness}</p>
-                </div>
-              ))}
+              {weaknessesLoading ? (
+                <div className="text-sm text-muted-foreground">Analyzing quiz mistakes...</div>
+              ) : (
+                weaknesses.map((weakness, index) => (
+                  <div key={index} className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20 rounded-lg">
+                    <div className="w-1.5 h-1.5 rounded-full bg-destructive mt-2 flex-shrink-0" />
+                    <p className="text-sm text-foreground">{weakness}</p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

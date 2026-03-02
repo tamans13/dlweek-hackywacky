@@ -242,6 +242,20 @@ export interface GeneratedQuiz {
   } | null;
 }
 
+export interface TopicWeaknessReport {
+  moduleName: string;
+  topicName: string;
+  weaknesses: string[];
+  source: string;
+  basedOn: {
+    attemptCount: number;
+    attemptsWithBreakdown: number;
+    totalQuestionsSeen: number;
+    totalWrong: number;
+    uniqueWrongQuestions: number;
+  };
+}
+
 export interface GeneratedQuizReviewItem {
   questionId: string;
   selectedIndex: number | null;
@@ -530,6 +544,11 @@ export function generateTopicQuiz(payload: {
 export function fetchTopicQuizzes(moduleName: string, topicName: string) {
   const query = new URLSearchParams({ moduleName, topicName }).toString();
   return request<{ quizzes: GeneratedQuiz[] }>(`/api/topic/quizzes?${query}`);
+}
+
+export function fetchTopicWeaknesses(moduleName: string, topicName: string) {
+  const query = new URLSearchParams({ moduleName, topicName }).toString();
+  return request<TopicWeaknessReport>(`/api/topic/weaknesses?${query}`);
 }
 
 export function submitTopicQuiz(payload: {
