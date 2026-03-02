@@ -200,6 +200,11 @@ function emptyState() {
     generatedQuizAttempts: [],
     spacedRetryQueue: [],
     spacedReviewRuns: [],
+    chatSessions: [],
+    dinoSignals: {
+      lastBehaviorByModule: {},
+      lastAlertAtByType: {},
+    },
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -233,6 +238,17 @@ function normalizeData(data) {
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
     spacedRetryQueue: Array.isArray(base.spacedRetryQueue) ? base.spacedRetryQueue : [],
     spacedReviewRuns: Array.isArray(base.spacedReviewRuns) ? base.spacedReviewRuns : [],
+    chatSessions: Array.isArray(base.chatSessions) ? base.chatSessions : [],
+    dinoSignals: base.dinoSignals && typeof base.dinoSignals === 'object'
+      ? {
+        lastBehaviorByModule: base.dinoSignals.lastBehaviorByModule && typeof base.dinoSignals.lastBehaviorByModule === 'object'
+          ? base.dinoSignals.lastBehaviorByModule
+          : {},
+        lastAlertAtByType: base.dinoSignals.lastAlertAtByType && typeof base.dinoSignals.lastAlertAtByType === 'object'
+          ? base.dinoSignals.lastAlertAtByType
+          : {},
+      }
+      : { lastBehaviorByModule: {}, lastAlertAtByType: {} },
   };
 
   for (const moduleName of state.profile.modules) {
@@ -1715,8 +1731,217 @@ function buildChatHeuristic(data, userMessage) {
   return `I can help with: 1) what to study next, 2) burnout recovery, 3) quiz strategy, 4) review prioritization. Your weakest topics now: ${weakest.map((t) => `${t.moduleName} - ${t.topicName}`).join(', ') || 'not enough data yet'}.`;
 }
 
-async function buildChatWithOpenAI(data, userMessage, history = []) {
-  if (!OPENAI_API_KEY) return buildChatHeuristic(data, userMessage);
+function ensureChatState(data) {
+  if (!Array.isArray(data.chatSessions)) data.chatSessions = [];
+  if (!data.dinoSignals || typeof data.dinoSignals !== 'object') {
+    data.dinoSignals = { lastBehaviorByModule: {}, lastAlertAtByType: {} };
+  }
+  if (!data.dinoSignals.lastBehaviorByModule || typeof data.dinoSignals.lastBehaviorByModule !== 'object') {
+    data.dinoSignals.lastBehaviorByModule = {};
+  }
+  if (!data.dinoSignals.lastAlertAtByType || typeof data.dinoSignals.lastAlertAtByType !== 'object') {
+    data.dinoSignals.lastAlertAtByType = {};
+  }
+}
+
+function serializeChatSessionMeta(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  const preview = messages.filter((m) => m.role === 'assistant').slice(-1)[0]?.content
+    || messages.filter((m) => m.role === 'user').slice(-1)[0]?.content
+    || '';
+  return {
+    id: session.id,
+    title: session.title || 'New chat',
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    preview: String(preview).slice(0, 120),
+    messageCount: messages.length,
+  };
+}
+
+function createChatSession(data, title = 'New chat') {
+  ensureChatState(data);
+  const now = nowIso();
+  const session = {
+    id: randomId('chat'),
+    title: String(title || 'New chat').trim() || 'New chat',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+  data.chatSessions.unshift(session);
+  return session;
+}
+
+function getOrCreateChatSession(data, sessionId = '') {
+  ensureChatState(data);
+  const target = String(sessionId || '').trim();
+  if (target) {
+    const existing = data.chatSessions.find((s) => s.id === target);
+    if (existing) return existing;
+  }
+  return createChatSession(data, 'New chat');
+}
+
+async function listAllTopicDocuments(userId, data, maxRows = 80) {
+  if (!SUPABASE_ENABLED) {
+    return (data.topicDocuments || []).slice(-maxRows);
+  }
+  const params = new URLSearchParams({
+    select: 'id,module_name,topic_name,file_name,extracted_text,uploaded_at',
+    user_id: `eq.${userId}`,
+    order: 'uploaded_at.desc',
+    limit: String(maxRows),
+  });
+  const res = await supabaseRequest(`/rest/v1/topic_documents?${params.toString()}`, {
+    useServiceRole: true,
+  });
+  if (!res.ok) return [];
+  const rows = await res.json();
+  return rows.map((row) => ({
+    id: row.id,
+    moduleName: row.module_name,
+    topicName: row.topic_name,
+    fileName: row.file_name,
+    extractedText: row.extracted_text || '',
+    uploadedAt: row.uploaded_at,
+  }));
+}
+
+function keywordTokens(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 3)
+    .slice(0, 80);
+}
+
+async function buildDocumentContextForChat(userId, data, userMessage) {
+  const docs = await listAllTopicDocuments(userId, data, 80);
+  const withText = docs.filter((d) => String(d.extractedText || '').trim().length > 0);
+  if (!withText.length) return { sources: [], contextText: '' };
+
+  const msgTokens = keywordTokens(userMessage);
+  const tokenSet = new Set(msgTokens);
+  const scored = withText.map((doc) => {
+    const text = String(doc.extractedText || '').toLowerCase();
+    let score = 0;
+    for (const token of tokenSet) {
+      if (text.includes(token)) score += 1;
+    }
+    if (String(userMessage || '').toLowerCase().includes(String(doc.topicName || '').toLowerCase())) score += 2;
+    if (String(userMessage || '').toLowerCase().includes(String(doc.moduleName || '').toLowerCase())) score += 2;
+    return { doc, score };
+  });
+
+  const top = scored
+    .sort((a, b) => b.score - a.score || new Date(b.doc.uploadedAt || 0).getTime() - new Date(a.doc.uploadedAt || 0).getTime())
+    .slice(0, 4)
+    .map((x) => x.doc);
+
+  const sources = top.map((doc) => ({
+    moduleName: doc.moduleName,
+    topicName: doc.topicName,
+    fileName: doc.fileName,
+  }));
+  const contextText = top
+    .map((doc, idx) => `Source ${idx + 1} [${doc.moduleName} / ${doc.topicName} / ${doc.fileName}]:\n${String(doc.extractedText || '').slice(0, 1800)}`)
+    .join('\n\n')
+    .slice(0, 9000);
+
+  return { sources, contextText };
+}
+
+function buildProactiveUpdates(data) {
+  ensureChatState(data);
+  const updates = [];
+  const now = nowIso();
+  const moduleNames = Object.keys(data.modules || {});
+  for (const moduleName of moduleNames) {
+    const mod = moduleState(data, moduleName);
+    const burnout = Math.round(Number(mod.burnoutRisk || 0));
+    if (burnout >= 71) {
+      updates.push({
+        id: `burnout_${moduleName}`,
+        severity: 'high',
+        title: `${moduleName}: Burnout Risk High (${burnout}%)`,
+        message: `You are showing burnout signals in ${moduleName}. Shift to light review only and rest for the day.`,
+        moduleName,
+      });
+    }
+
+    const prevBehavior = String(data.dinoSignals.lastBehaviorByModule[moduleName] || '');
+    const currentBehavior = String(mod.behaviorType || '');
+    if (currentBehavior && prevBehavior && currentBehavior !== prevBehavior) {
+      updates.push({
+        id: `behavior_${moduleName}`,
+        severity: 'medium',
+        title: `${moduleName}: Study Persona Shift`,
+        message: `Dino detected a behavior shift from "${prevBehavior}" to "${currentBehavior}". I adjusted your recovery suggestions.`,
+        moduleName,
+      });
+    }
+    if (currentBehavior) data.dinoSignals.lastBehaviorByModule[moduleName] = currentBehavior;
+
+    const plan = data.examPlans?.[moduleName];
+    if (plan?.examDate) {
+      const readiness = readinessScore(moduleName, data);
+      const daysToExam = Math.ceil(daysBetween(now, plan.examDate));
+      if (daysToExam <= 14 && readiness.score < 55) {
+        updates.push({
+          id: `readiness_${moduleName}`,
+          severity: 'high',
+          title: `${moduleName}: Low Exam Readiness (${readiness.score}%)`,
+          message: `Exam is in ${daysToExam} day(s). Focus weak topics and run one 15-min spaced review + one quiz today.`,
+          moduleName,
+        });
+      }
+    }
+  }
+
+  const dueCount = computeReviewPriorities(data, { topN: 100 }).filter((x) => x.priority > 0).length;
+  if (dueCount >= 6) {
+    updates.push({
+      id: 'due_reviews',
+      severity: 'medium',
+      title: `Spaced Reviews Piling Up (${dueCount})`,
+      message: 'You have many due reviews. Clear 3 highest-priority topics before starting new content.',
+      moduleName: '',
+    });
+  }
+
+  updates.sort((a, b) => (a.severity === 'high' ? -1 : 1));
+  return updates.slice(0, 5);
+}
+
+function buildChatHeuristicWithContext(data, userMessage, docContext = '', proactive = []) {
+  const base = buildChatHeuristic(data, userMessage);
+  const lower = String(userMessage || '').toLowerCase();
+  const asksForNotes = /notes|lecture|pdf|slide|explain|summari|what is|what's|define|concept/.test(lower);
+  if (!docContext && asksForNotes) {
+    return 'I cannot read usable text from your uploaded notes yet, so I will not guess content. Re-upload as text-based PDF/DOCX/MD/TXT, or install OCR (Tesseract + Poppler: pdftoppm/pdftotext) and re-upload the same file.';
+  }
+  if (docContext && (lower.includes('notes') || lower.includes('lecture') || lower.includes('explain') || lower.includes('what is'))) {
+    return `${base}\n\nFrom your uploaded notes, I found relevant material. Ask a specific concept question and I will answer with source-based explanation.`;
+  }
+  if (Array.isArray(proactive) && proactive.length && (lower.includes('update') || lower.includes('status'))) {
+    return `${base}\n\nProactive updates: ${proactive.map((x) => x.title).join(' | ')}`;
+  }
+  return base;
+}
+
+async function buildChatWithOpenAI(data, userMessage, history = [], context = {}) {
+  const docContext = String(context.docContext || '');
+  const proactiveUpdates = Array.isArray(context.proactiveUpdates) ? context.proactiveUpdates : [];
+  const docSources = Array.isArray(context.docSources) ? context.docSources : [];
+  const lower = String(userMessage || '').toLowerCase();
+  const asksForNotes = /notes|lecture|pdf|slide|explain|summari|what is|what's|define|concept/.test(lower);
+  if (!docContext && asksForNotes) {
+    return 'I cannot read usable text from your uploaded notes yet, so I will not guess content. Re-upload as text-based PDF/DOCX/MD/TXT, or install OCR (Tesseract + Poppler: pdftoppm/pdftotext) and re-upload the same file.';
+  }
+  if (!OPENAI_API_KEY) return buildChatHeuristicWithContext(data, userMessage, docContext, proactiveUpdates);
   try {
     const modulePayload = Object.keys(data.modules).map((name) => {
       const mod = moduleState(data, name);
@@ -1743,6 +1968,9 @@ async function buildChatWithOpenAI(data, userMessage, history = []) {
       modules: modulePayload,
       recentQuizAttempts: data.quizAttempts.slice(-20),
       recentTabEvents: data.tabEvents.slice(-40),
+      proactiveUpdates,
+      noteSources: docSources,
+      noteContext: docContext,
       userMessage: String(userMessage || ''),
       history: trimmedHistory,
     };
@@ -1751,6 +1979,9 @@ async function buildChatWithOpenAI(data, userMessage, history = []) {
       'You are Dino Coach, a concise study copilot with occasional dinosaur puns and humour where appropriate.',
       'Keep responses practical, supportive, and specific to the provided learning data.',
       'Limit to about 4-6 short sentences, with clear next actions.',
+      'If noteContext is provided and relevant, answer using it and mention source module/topic/file.',
+      'If noteContext is empty, never infer or guess lecture content. Explicitly say extraction is unavailable and give short remediation steps.',
+      'Be proactive: if proactiveUpdates contains high severity items, surface one short warning first.',
       'If data is sparse, say exactly what data is missing and what to do next.',
       JSON.stringify(payload),
     ].join('\n');
@@ -1768,13 +1999,13 @@ async function buildChatWithOpenAI(data, userMessage, history = []) {
       }),
     });
 
-    if (!response.ok) return buildChatHeuristic(data, userMessage);
+    if (!response.ok) return buildChatHeuristicWithContext(data, userMessage, docContext, proactiveUpdates);
     const result = await response.json();
     const text = String(readResponseText(result) || '').trim();
-    if (!text) return buildChatHeuristic(data, userMessage);
+    if (!text) return buildChatHeuristicWithContext(data, userMessage, docContext, proactiveUpdates);
     return text;
   } catch {
-    return buildChatHeuristic(data, userMessage);
+    return buildChatHeuristicWithContext(data, userMessage, docContext, proactiveUpdates);
   }
 }
 
@@ -2130,7 +2361,142 @@ function extractPdfText(buffer) {
   return normalizeExtractedText(chunks.join('\n'));
 }
 
-function extractTextFromFile(fileName, mimeType, buffer) {
+function extractPdfTextWithCli(buffer) {
+  const pdfPath = writeTempFile(buffer, '.pdf');
+  const txtPath = writeTempFile(Buffer.from(''), '.txt');
+  try {
+    // Poppler's pdftotext is available on many systems (macOS/Linux, optional on Windows).
+    execFileSync('pdftotext', ['-layout', '-enc', 'UTF-8', pdfPath, txtPath], {
+      stdio: 'ignore',
+      timeout: 30_000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    if (!fs.existsSync(txtPath)) return '';
+    const out = fs.readFileSync(txtPath, 'utf8');
+    return normalizeExtractedText(out);
+  } catch {
+    return '';
+  } finally {
+    removeTempFile(pdfPath);
+    removeTempFile(txtPath);
+  }
+}
+
+function commandExists(commandName) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('where', [commandName], { stdio: 'ignore' });
+    } else {
+      execFileSync('which', [commandName], { stdio: 'ignore' });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeDirSafe(dirPath) {
+  if (!dirPath) return;
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+function extractPdfTextWithOcrCli(buffer) {
+  if (!commandExists('pdftoppm') || !commandExists('tesseract')) return '';
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brainosaur_pdfocr_'));
+  try {
+    const pdfPath = path.join(workDir, 'input.pdf');
+    fs.writeFileSync(pdfPath, buffer);
+    const pagePrefix = path.join(workDir, 'page');
+
+    // OCR only first pages for latency control.
+    execFileSync('pdftoppm', ['-png', '-f', '1', '-l', '10', pdfPath, pagePrefix], {
+      stdio: 'ignore',
+      timeout: 45_000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+
+    const pngFiles = fs.readdirSync(workDir)
+      .filter((name) => /^page-\d+\.png$/i.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (!pngFiles.length) return '';
+
+    const chunks = [];
+    for (const fileName of pngFiles.slice(0, 10)) {
+      const imagePath = path.join(workDir, fileName);
+      try {
+        const text = execFileSync('tesseract', [imagePath, 'stdout', '-l', 'eng', '--psm', '6'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 45_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+        if (text && String(text).trim()) {
+          chunks.push(String(text));
+        }
+      } catch {
+        // Ignore OCR page failures and continue.
+      }
+      const total = chunks.reduce((sum, item) => sum + item.length, 0);
+      if (total >= MAX_EXTRACTED_TEXT_CHARS) break;
+    }
+
+    return normalizeExtractedText(chunks.join('\n'));
+  } catch {
+    return '';
+  } finally {
+    removeDirSafe(workDir);
+  }
+}
+
+async function extractPdfTextWithPdfJs(buffer) {
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    });
+    const doc = await loadingTask.promise;
+    const chunks = [];
+    let totalChars = 0;
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+      const page = await doc.getPage(pageNum);
+      const text = await page.getTextContent();
+      const lines = [];
+      for (const item of text.items || []) {
+        if (item && typeof item.str === 'string' && item.str.trim()) {
+          lines.push(item.str);
+        }
+      }
+      const pageText = normalizeExtractedText(lines.join('\n'));
+      if (pageText) {
+        chunks.push(pageText);
+        totalChars += pageText.length;
+      }
+      if (totalChars >= MAX_EXTRACTED_TEXT_CHARS) break;
+    }
+    return normalizeExtractedText(chunks.join('\n'));
+  } catch {
+    return '';
+  }
+}
+
+function bestExtractedText(candidates) {
+  let best = '';
+  for (const candidate of candidates) {
+    const text = normalizeExtractedText(candidate || '');
+    if (text.length > best.length) best = text;
+  }
+  return best;
+}
+
+async function extractTextFromFile(fileName, mimeType, buffer) {
   const ext = path.extname(String(fileName || '')).toLowerCase();
   if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) return '';
 
@@ -2154,7 +2520,17 @@ function extractTextFromFile(fileName, mimeType, buffer) {
 
   if (ext === '.pdf') {
     try {
-      return extractPdfText(buffer);
+      const fastText = extractPdfText(buffer);
+      if (fastText.length >= 120) return fastText;
+
+      const cliText = extractPdfTextWithCli(buffer);
+      if (cliText.length >= 120) return cliText;
+
+      const pdfJsText = await extractPdfTextWithPdfJs(buffer);
+      if (pdfJsText.length >= 120) return pdfJsText;
+
+      const ocrText = extractPdfTextWithOcrCli(buffer);
+      return bestExtractedText([fastText, cliText, pdfJsText, ocrText]);
     } catch (err) {
       console.warn('PDF extraction failed', fileName, err instanceof Error ? err.message : err);
       return '';
@@ -2352,6 +2728,61 @@ async function insertTopicDocument(userId, record, data) {
   const rows = await res.json();
   const row = rows[0];
 
+  return {
+    id: row.id,
+    moduleName: row.module_name,
+    topicName: row.topic_name,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    storagePath: row.storage_path,
+    extractedText: row.extracted_text || '',
+    uploadedAt: row.uploaded_at,
+  };
+}
+
+async function updateTopicDocument(userId, docId, updates, data) {
+  if (!docId) return null;
+  if (!SUPABASE_ENABLED) {
+    const index = (data.topicDocuments || []).findIndex((x) => String(x.id) === String(docId));
+    if (index < 0) return null;
+    const current = data.topicDocuments[index];
+    const next = {
+      ...current,
+      ...updates,
+      uploadedAt: updates.uploadedAt || current.uploadedAt || nowIso(),
+    };
+    data.topicDocuments[index] = next;
+    return next;
+  }
+
+  const params = new URLSearchParams({
+    id: `eq.${docId}`,
+    user_id: `eq.${userId}`,
+  });
+
+  const res = await supabaseRequest(`/rest/v1/topic_documents?${params.toString()}`, {
+    method: 'PATCH',
+    useServiceRole: true,
+    headers: {
+      Prefer: 'return=representation',
+    },
+    body: {
+      file_name: updates.fileName,
+      mime_type: updates.mimeType,
+      storage_path: updates.storagePath,
+      extracted_text: updates.extractedText,
+      uploaded_at: updates.uploadedAt || nowIso(),
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to update topic document metadata: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
+  }
+
+  const rows = await res.json();
+  const row = rows[0];
+  if (!row) return null;
   return {
     id: row.id,
     moduleName: row.module_name,
@@ -3800,10 +4231,14 @@ async function apiHandler(req, res, parsedUrl) {
     topicState(mod, topicName);
 
     const existingDocuments = await listTopicDocuments(user.id, moduleName, topicName, data);
+    const existingByName = new Map(
+      existingDocuments.map((doc) => [String(doc.fileName || '').trim().toLowerCase(), doc]),
+    );
     const existingNames = new Set(existingDocuments.map((doc) => String(doc.fileName || '').trim().toLowerCase()).filter(Boolean));
 
     const uploaded = [];
     const skipped = [];
+    const reprocessed = [];
 
     for (const rawFile of files.slice(0, MAX_UPLOAD_FILES)) {
       const fileName = String(rawFile.fileName || '').trim();
@@ -3813,6 +4248,39 @@ async function apiHandler(req, res, parsedUrl) {
       if (!fileName || !buffer.length) continue;
       const normalizedName = fileName.toLowerCase();
       if (existingNames.has(normalizedName)) {
+        const existingDoc = existingByName.get(normalizedName);
+        const existingText = String(existingDoc?.extractedText || '').trim();
+        if (existingDoc && !existingText) {
+          if (buffer.length > MAX_UPLOAD_FILE_BYTES) {
+            return send(res, 400, { error: `File ${fileName} exceeds ${Math.floor(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))}MB limit` });
+          }
+          const extractedText = await extractTextFromFile(fileName, mimeType, buffer);
+          const storagePath = SUPABASE_ENABLED
+            ? await uploadToSupabaseStorage(user.id, moduleName, topicName, fileName, mimeType, buffer)
+            : uploadToLocalStorage(user.id, moduleName, topicName, fileName, buffer);
+          const refreshed = await updateTopicDocument(
+            user.id,
+            existingDoc.id,
+            {
+              moduleName,
+              topicName,
+              fileName,
+              mimeType,
+              storagePath,
+              extractedText,
+              uploadedAt: nowIso(),
+            },
+            data,
+          );
+          if (refreshed) {
+            uploaded.push(refreshed);
+            reprocessed.push(fileName);
+            existingByName.set(normalizedName, refreshed);
+          } else {
+            skipped.push(fileName);
+          }
+          continue;
+        }
         skipped.push(fileName);
         continue;
       }
@@ -3821,7 +4289,7 @@ async function apiHandler(req, res, parsedUrl) {
         return send(res, 400, { error: `File ${fileName} exceeds ${Math.floor(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))}MB limit` });
       }
 
-      const extractedText = extractTextFromFile(fileName, mimeType, buffer);
+      const extractedText = await extractTextFromFile(fileName, mimeType, buffer);
       const storagePath = SUPABASE_ENABLED
         ? await uploadToSupabaseStorage(user.id, moduleName, topicName, fileName, mimeType, buffer)
         : uploadToLocalStorage(user.id, moduleName, topicName, fileName, buffer);
@@ -3840,6 +4308,7 @@ async function apiHandler(req, res, parsedUrl) {
       );
       uploaded.push(record);
       existingNames.add(normalizedName);
+      existingByName.set(normalizedName, record);
     }
 
     if (!SUPABASE_ENABLED) {
@@ -3855,6 +4324,7 @@ async function apiHandler(req, res, parsedUrl) {
         ok: true,
         uploaded: [],
         skipped,
+        reprocessed,
         documents: documents.map((doc) => ({
           id: doc.id,
           moduleName: doc.moduleName,
@@ -3881,6 +4351,7 @@ async function apiHandler(req, res, parsedUrl) {
         uploadedAt: doc.uploadedAt,
       })),
       skipped,
+      reprocessed,
       documents: documents.map((doc) => ({
         id: doc.id,
         moduleName: doc.moduleName,
@@ -4531,14 +5002,106 @@ async function apiHandler(req, res, parsedUrl) {
     return send(res, 200, { ok: true, insights, aiEnabled: Boolean(OPENAI_API_KEY) });
   }
 
+  if (req.method === 'GET' && pathname === '/api/chat/sessions') {
+    for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    ensureChatState(data);
+    const proactiveUpdates = buildProactiveUpdates(data);
+    await saveDataForUser(user.id, data);
+    return send(res, 200, {
+      sessions: data.chatSessions
+        .slice()
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .map(serializeChatSessionMeta),
+      proactiveUpdates,
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/chat/sessions') {
+    const body = await parseBody(req);
+    ensureChatState(data);
+    const title = String(body.title || '').trim() || 'New chat';
+    const session = createChatSession(data, title);
+    await saveDataForUser(user.id, data);
+    return send(res, 200, {
+      ok: true,
+      session: {
+        ...serializeChatSessionMeta(session),
+        messages: [],
+      },
+    });
+  }
+
+  if (req.method === 'GET' && pathname.startsWith('/api/chat/sessions/')) {
+    const sessionId = decodeURIComponent(pathname.slice('/api/chat/sessions/'.length) || '').trim();
+    if (!sessionId) return send(res, 400, { error: 'sessionId is required' });
+    ensureChatState(data);
+    const session = data.chatSessions.find((s) => s.id === sessionId);
+    if (!session) return send(res, 404, { error: 'Chat session not found' });
+    return send(res, 200, {
+      session: {
+        ...serializeChatSessionMeta(session),
+        messages: Array.isArray(session.messages) ? session.messages : [],
+      },
+    });
+  }
+
   if (req.method === 'POST' && pathname === '/api/chat') {
     const body = await parseBody(req);
     const message = String(body.message || '').trim();
     if (!message) return send(res, 400, { error: 'message is required' });
 
     for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
-    const reply = await buildChatWithOpenAI(data, message, Array.isArray(body.history) ? body.history : []);
-    return send(res, 200, { ok: true, reply, aiEnabled: Boolean(OPENAI_API_KEY) });
+    ensureChatState(data);
+
+    const session = getOrCreateChatSession(data, String(body.sessionId || '').trim());
+    const userEntry = {
+      id: randomId('chatmsg'),
+      role: 'user',
+      content: message,
+      at: nowIso(),
+    };
+    session.messages = Array.isArray(session.messages) ? session.messages : [];
+    session.messages.push(userEntry);
+
+    const docPack = await buildDocumentContextForChat(user.id, data, message);
+    const proactiveUpdates = buildProactiveUpdates(data);
+    const normalizedHistory = session.messages
+      .slice(-20)
+      .map((entry) => ({ role: entry.role, content: entry.content }));
+    const reply = await buildChatWithOpenAI(
+      data,
+      message,
+      normalizedHistory,
+      {
+        docContext: docPack.contextText,
+        docSources: docPack.sources,
+        proactiveUpdates,
+      },
+    );
+
+    const assistantEntry = {
+      id: randomId('chatmsg'),
+      role: 'assistant',
+      content: String(reply || '').trim() || 'I could not generate a response right now. Try again.',
+      at: nowIso(),
+    };
+    session.messages.push(assistantEntry);
+    session.messages = session.messages.slice(-120);
+    if (session.title === 'New chat' && message) {
+      session.title = message.slice(0, 42);
+    }
+    session.updatedAt = nowIso();
+
+    await saveDataForUser(user.id, data);
+    return send(res, 200, {
+      ok: true,
+      reply: assistantEntry.content,
+      sessionId: session.id,
+      session: serializeChatSessionMeta(session),
+      proactiveUpdates,
+      sourceHints: docPack.sources.slice(0, 4),
+      aiEnabled: Boolean(OPENAI_API_KEY),
+    });
   }
 
   return send(res, 404, { error: 'Not found' });
