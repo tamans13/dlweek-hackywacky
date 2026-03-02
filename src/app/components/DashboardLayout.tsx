@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import { 
   LayoutDashboard, 
@@ -10,10 +11,46 @@ import {
 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import DinoChat from "./DinoChat";
+import { derivePersonaFromSummary, getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
 
 export default function DashboardLayout() {
   const location = useLocation();
-  const { authUser, logout } = useAppData();
+  const { authUser, logout, state, runInsights } = useAppData();
+  const [showProfileDot, setShowProfileDot] = useState(false);
+  const moduleName = useMemo(() => state?.profile.modules?.[0] || "", [state]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function evaluatePersonaChange() {
+      if (!moduleName) return;
+      try {
+        const data = await runInsights(moduleName);
+        if (cancelled) return;
+        const persona = derivePersonaFromSummary(data.summary);
+        const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+        const previousPersona = window.localStorage.getItem(currentKey);
+        const seenPersona = window.localStorage.getItem(seenKey);
+
+        if (!previousPersona && !seenPersona) {
+          window.localStorage.setItem(currentKey, persona);
+          window.localStorage.setItem(seenKey, persona);
+          setShowProfileDot(false);
+          return;
+        }
+
+        window.localStorage.setItem(currentKey, persona);
+        setShowProfileDot(seenPersona !== persona);
+      } catch {
+        // Keep UI stable if insights are temporarily unavailable.
+      }
+    }
+
+    void evaluatePersonaChange();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleName, runInsights, authUser?.email]);
 
   const isActive = (path: string) => {
     // For dashboard, only match exact path
@@ -53,10 +90,18 @@ export default function DashboardLayout() {
           {navItems.map((item) => {
             const Icon = item.icon;
             const active = isActive(item.path);
+            const isProfileItem = item.path === "/dashboard/profile";
+            const shouldShowDot = isProfileItem && showProfileDot && !active;
             return (
               <Link
                 key={item.path}
                 to={item.path}
+                onClick={() => {
+                  if (isProfileItem && showProfileDot) {
+                    window.sessionStorage.setItem(PROFILE_FLASH_KEY, "1");
+                    setShowProfileDot(false);
+                  }
+                }}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                   active
                     ? "bg-primary text-primary-foreground"
@@ -64,7 +109,10 @@ export default function DashboardLayout() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="text-sm">{item.label}</span>
+                <span className="text-sm flex items-center gap-2">
+                  {item.label}
+                  {shouldShowDot && <span className="w-2 h-2 rounded-full bg-warning animate-pulse" aria-hidden="true" />}
+                </span>
               </Link>
             );
           })}

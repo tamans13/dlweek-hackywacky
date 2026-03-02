@@ -3830,10 +3830,12 @@ async function apiHandler(req, res, parsedUrl) {
   if (req.method === 'POST' && pathname === '/api/exam-plan') {
     const body = await parseBody(req);
     if (!body.moduleName || !body.examDate) return send(res, 400, { error: 'moduleName and examDate required' });
+    const examName = String(body.examName || '').trim();
     const topicsTested = Array.isArray(body.topicsTested)
       ? Array.from(new Set(body.topicsTested.map((x) => String(x || '').trim()).filter(Boolean)))
       : [];
     data.examPlans[body.moduleName] = {
+      examName,
       examDate: body.examDate,
       totalTopics: topicsTested.length,
       topicsCovered: topicsTested.length,

@@ -4,10 +4,12 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { User, Edit2, Save } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
+import { derivePersonaFromSummary, getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
 
 export default function Profile() {
-  const { state, loading, error, saveProfileData, runInsights } = useAppData();
+  const { state, loading, error, saveProfileData, runInsights, authUser } = useAppData();
   const [isEditing, setIsEditing] = useState(false);
+  const [highlightPersonaCard, setHighlightPersonaCard] = useState(false);
   const [profileData, setProfileData] = useState({
     name: "",
     email: "",
@@ -35,19 +37,26 @@ export default function Profile() {
   const moduleName = useMemo(() => state?.profile.modules?.[0] || "", [state]);
 
   useEffect(() => {
+    if (window.sessionStorage.getItem(PROFILE_FLASH_KEY) !== "1") return;
+    window.sessionStorage.removeItem(PROFILE_FLASH_KEY);
+    setHighlightPersonaCard(true);
+    const timeout = window.setTimeout(() => setHighlightPersonaCard(false), 1600);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     async function loadPersona() {
       if (!moduleName) return;
       try {
         const data = await runInsights(moduleName);
         if (!cancelled) {
-          const derivedPersona = data.summary.toLowerCase().includes("burnout")
-            ? "Recovery-Oriented Learner"
-            : data.summary.toLowerCase().includes("weak")
-              ? "Targeted Remediation Learner"
-              : "Analytical Burst Learner";
+          const derivedPersona = derivePersonaFromSummary(data.summary);
           setPersona(derivedPersona);
           setPersonaSummary(data.summary);
+          const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+          window.localStorage.setItem(currentKey, derivedPersona);
+          window.localStorage.setItem(seenKey, derivedPersona);
         }
       } catch {
         // Keep fallback persona text.
@@ -57,7 +66,7 @@ export default function Profile() {
     return () => {
       cancelled = true;
     };
-  }, [moduleName, runInsights]);
+  }, [moduleName, runInsights, authUser?.email]);
 
   const handleSave = async () => {
     if (!state) return;
@@ -165,7 +174,11 @@ export default function Profile() {
             </div>
           </div>
 
-          <div className="bg-primary/5 border border-primary/20 rounded-lg p-5 mb-6">
+          <div
+            className={`rounded-lg p-5 mb-6 transition-colors duration-500 ${
+              highlightPersonaCard ? "bg-warning/20 border border-warning/60" : "bg-primary/5 border border-primary/20"
+            }`}
+          >
             <div className="text-sm text-muted-foreground mb-1">Your Study Persona</div>
             <div className="text-2xl font-medium text-foreground mb-3">{persona}</div>
             <p className="text-sm text-muted-foreground leading-relaxed">{personaSummary}</p>
