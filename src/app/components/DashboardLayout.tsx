@@ -27,7 +27,7 @@ export default function DashboardLayout() {
   const navItems = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
     { icon: BookOpen, label: "Modules", path: "/dashboard/modules" },
-    { icon: TrendingUp, label: "Insights", path: "/dashboard/insights" },
+    { icon: TrendingUp, label: "Behavioral Insights", path: "/dashboard/insights" },
     { icon: Target, label: "Exam Readiness", path: "/dashboard/exam-readiness" },
     { icon: User, label: "My Profile", path: "/dashboard/profile" },
     { icon: SettingsIcon, label: "Settings", path: "/dashboard/settings" },

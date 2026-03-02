@@ -1,57 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router";
-import { Calendar, CheckCircle2, ChevronDown } from "lucide-react";
+import { Calendar, CheckCircle2 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
-import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
-import { Checkbox } from "../components/ui/checkbox";
 import { daysUntil, formatDate } from "../lib/format";
 import { toSlug } from "../lib/ids";
 
 export default function ExamReadiness() {
-  const { state, readiness, loading, error, saveExamPlan } = useAppData();
+  const { state, readiness, loading, error } = useAppData();
   const moduleNames = state ? state.profile.modules : [];
-
-  const [moduleName, setModuleName] = useState("");
-  const [examDate, setExamDate] = useState("");
-  const [topicsTested, setTopicsTested] = useState<string[]>([]);
-  const [topicsPopoverOpen, setTopicsPopoverOpen] = useState(false);
-
-  useEffect(() => {
-    if (!moduleName && moduleNames.length) {
-      setModuleName(moduleNames[0]);
-    }
-  }, [moduleName, moduleNames]);
-
-  useEffect(() => {
-    if (!state || !moduleName) return;
-    const plan = state.examPlans[moduleName];
-    if (plan) {
-      setExamDate(plan.examDate);
-      setTopicsTested(plan.topicsTested || []);
-    } else {
-      setExamDate("");
-      setTopicsTested([]);
-    }
-  }, [moduleName, state]);
-
-  const moduleTopicOptions = useMemo(() => {
-    if (!state || !moduleName) return [];
-    return Object.keys(state.modules[moduleName]?.topics || {}).sort((a, b) => a.localeCompare(b));
-  }, [state, moduleName]);
-
-  useEffect(() => {
-    setTopicsTested((prev) => prev.filter((topicName) => moduleTopicOptions.includes(topicName)));
-  }, [moduleTopicOptions]);
-
-  const topicsTriggerLabel = useMemo(() => {
-    if (!topicsTested.length) return "Select topics";
-    if (topicsTested.length <= 2) return topicsTested.join(", ");
-    return `${topicsTested.length} topics selected`;
-  }, [topicsTested]);
 
   const readinessByModule = useMemo(() => {
     if (!state) return [];
@@ -94,22 +50,12 @@ export default function ExamReadiness() {
     });
   }, [state, moduleNames, readiness]);
 
-  const handleSaveExam = async () => {
-    if (!moduleName || !examDate) return;
-    await saveExamPlan({
-      moduleName,
-      examDate,
-      totalTopics: topicsTested.length,
-      topicsCovered: topicsTested.length,
-      topicsTested,
-    });
-  };
-  const toggleTopic = (topicName: string, checked: boolean) => {
-    setTopicsTested((prev) => {
-      if (checked) return Array.from(new Set([...prev, topicName]));
-      return prev.filter((topic) => topic !== topicName);
-    });
-  };
+  const nextExamDays = useMemo(() => {
+    const upcoming = readinessByModule
+      .filter((exam) => exam.daysRemaining !== null)
+      .sort((a, b) => (a.daysRemaining || 999) - (b.daysRemaining || 999))[0];
+    return upcoming?.daysRemaining ?? null;
+  }, [readinessByModule]);
 
   const getReadinessColor = (value: number) => {
     if (value >= 80) return "text-success";
@@ -141,60 +87,21 @@ export default function ExamReadiness() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-5">
-        <div className="bg-card border border-border rounded-lg p-5 space-y-4">
-          <h3 className="font-medium text-foreground">Update Exam Plan</h3>
-          <div className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Module</Label>
-                <Select value={moduleName} onValueChange={setModuleName}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select module" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {moduleNames.map((name) => (
-                      <SelectItem key={name} value={name}>{name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Exam Date</Label>
-                <Input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Topics Tested</Label>
-                <Popover open={topicsPopoverOpen} onOpenChange={setTopicsPopoverOpen}>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="w-full justify-between font-normal">
-                      <span className="truncate">{topicsTriggerLabel}</span>
-                      <ChevronDown className="w-4 h-4 ml-2 text-muted-foreground" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-[320px] p-3">
-                    <div className="space-y-2">
-                      {!moduleTopicOptions.length && (
-                        <p className="text-sm text-muted-foreground">No topics available for this module.</p>
-                      )}
-                      {moduleTopicOptions.map((topicName) => (
-                        <label key={topicName} className="flex items-center gap-2 text-sm text-foreground">
-                          <Checkbox checked={topicsTested.includes(topicName)} onCheckedChange={(checked) => toggleTopic(topicName, checked === true)} />
-                          <span>{topicName}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-                <p className="text-xs text-muted-foreground">Select all topics that are tested in this exam.</p>
-              </div>
-              <div className="space-y-2">
-                <Label>Number of Topics</Label>
-                <Input value={String(topicsTested.length)} readOnly className="bg-muted/50" />
-              </div>
-            </div>
-            <Button onClick={handleSaveExam}>Save</Button>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="bg-card border border-border rounded-lg p-4 space-y-2 md:col-span-2">
+            <h3 className="font-medium text-foreground">Add Upcoming Exams</h3>
+            <p className="text-sm text-muted-foreground">
+              To add an exam or midterm, go to the{" "}
+              <Link to="/dashboard/modules" className="font-medium text-primary hover:underline">
+                Module tab
+              </Link>{" "}
+              and select your module.
+            </p>
+          </div>
+
+          <div className="rounded-lg p-4 bg-primary text-primary-foreground">
+            <div className="text-sm text-primary-foreground/80">Days Until Next Exam</div>
+            <div className="mt-1 text-3xl font-medium">{nextExamDays ?? "-"}</div>
           </div>
         </div>
 
@@ -277,26 +184,6 @@ export default function ExamReadiness() {
           );
         })}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mt-8">
-          <div className="bg-card border border-border rounded-lg p-5 text-center">
-            <div className="text-3xl font-medium text-foreground mb-1">
-              {readinessByModule.length ? Math.round(readinessByModule.reduce((sum, exam) => sum + exam.readiness, 0) / readinessByModule.length) : 0}%
-            </div>
-            <div className="text-sm text-muted-foreground">Average Readiness</div>
-          </div>
-          <div className="bg-card border border-border rounded-lg p-5 text-center">
-            <div className="text-3xl font-medium text-foreground mb-1">
-              {readinessByModule.filter((x) => x.daysRemaining !== null).sort((a, b) => (a.daysRemaining || 999) - (b.daysRemaining || 999))[0]?.daysRemaining ?? "-"}
-            </div>
-            <div className="text-sm text-muted-foreground">Days Until Next Exam</div>
-          </div>
-          <div className="bg-card border border-border rounded-lg p-5 text-center">
-            <div className="text-3xl font-medium text-foreground mb-1">
-              {readinessByModule.reduce((sum, exam) => sum + exam.topicsTested.filter((t) => t.needsReview).length, 0)}
-            </div>
-            <div className="text-sm text-muted-foreground">Topics Tested Need Review</div>
-          </div>
-        </div>
       </div>
     </div>
   );
