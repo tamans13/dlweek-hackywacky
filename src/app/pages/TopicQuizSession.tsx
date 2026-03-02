@@ -172,14 +172,8 @@ export default function TopicQuizSession() {
 
         {!resourceLoading && quiz && hasStartedTopicSession && (
           <div className="bg-card border border-border rounded-lg p-5">
-            <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="mb-4">
               <h2 className="text-lg font-medium text-foreground">{quiz.title}</h2>
-              {!attemptLocked && !quizResult && (
-                <Button onClick={handleSubmitQuiz} disabled={submittingQuiz}>
-                  {submittingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                  Submit Quiz
-                </Button>
-              )}
             </div>
 
             {attemptLocked && !quizResult && (
@@ -234,6 +228,15 @@ export default function TopicQuizSession() {
                 );
               })}
             </div>
+
+            {!attemptLocked && !quizResult && (
+              <div className="mt-5">
+                <Button onClick={handleSubmitQuiz} disabled={submittingQuiz}>
+                  {submittingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                  Submit Quiz
+                </Button>
+              </div>
+            )}
 
             {quizResult && (
               <div className="mt-4 p-4 border border-border rounded-lg bg-muted/20">

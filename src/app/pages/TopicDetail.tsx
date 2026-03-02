@@ -254,8 +254,12 @@ export default function TopicDetail() {
   const handleGenerateQuiz = async () => {
     if (!moduleName || !topicName) return;
 
-    if (!hasStartedTopicSession) {
+    if (!activeTopicSession) {
       setResourceError("Start a study session timer for this topic before generating an AI quiz.");
+      return;
+    }
+    if (quizzes.length > 0) {
+      setQuizStatusMessage("A quiz has already been generated for this topic.");
       return;
     }
 
@@ -281,7 +285,7 @@ export default function TopicDetail() {
 
   const handleTakeQuiz = (quiz: GeneratedQuiz) => {
     if (!moduleName || !topicName) return;
-    if (!hasStartedTopicSession) {
+    if (!activeTopicSession) {
       setResourceError("Start a study session timer for this topic before taking an AI quiz.");
       return;
     }
@@ -291,6 +295,10 @@ export default function TopicDetail() {
 
   const handleStartSpacedReview = () => {
     if (!moduleName || !topicName) return;
+    if (!hasStartedTopicSession) {
+      setResourceError("Start a study session timer for this topic before starting spaced repetition revision.");
+      return;
+    }
     navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/spaced-review`);
   };
 
@@ -319,6 +327,7 @@ export default function TopicDetail() {
   const masteryPct = toPct(masteryNow);
   const retentionDecay = attempts.length ? Math.max(0, Math.round((topic.mastery - masteryNow) * 10)) : 0;
   const risk = retentionDecay > 30 ? "high" : retentionDecay > 12 ? "medium" : "low";
+  const quizAlreadyGenerated = quizzes.length > 0;
 
   return (
     <div className="min-h-screen">
@@ -421,57 +430,70 @@ export default function TopicDetail() {
             </div>
           </div>
 
-          <div className="bg-card border border-border rounded-lg p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="w-5 h-5 text-primary" />
-              <h3 className="font-medium text-foreground text-lg">AI Quiz Generator</h3>
+          <div className="space-y-5">
+            <div className="bg-card border border-border rounded-lg p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Calendar className="w-5 h-5 text-primary" />
+                <h3 className="font-medium text-foreground text-lg">Spaced Repetition Revision</h3>
+              </div>
+
+              <Button variant="outline" onClick={handleStartSpacedReview} disabled={!hasStartedTopicSession}>
+                Start Spaced Repetition Revision
+              </Button>
+
+              {!hasStartedTopicSession && (
+                <p className="text-xs text-muted-foreground mt-3">Start the topic study session timer to unlock spaced repetition revision.</p>
+              )}
             </div>
 
-            <div className="flex items-end gap-3 mb-4">
-              <Button variant="outline" onClick={handleStartSpacedReview} disabled={!documents.length}>
-                15-min Spaced Review
-              </Button>
-              <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length || !hasStartedTopicSession}>
-                {generatingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                {generatingQuiz ? "Generating..." : "Generate Quiz"}
-              </Button>
-              <span className="text-xs text-muted-foreground">AI decides question count (max 10).</span>
-            </div>
+            {activeTopicSession && (
+              <div className="bg-card border border-border rounded-lg p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="w-5 h-5 text-primary" />
+                  <h3 className="font-medium text-foreground text-lg">AI Quiz Generator</h3>
+                </div>
 
-            {!hasStartedTopicSession && (
-              <p className="text-xs text-muted-foreground mb-3">Start the topic study session timer to unlock quiz generation.</p>
+                <div className="flex items-end gap-3 mb-4">
+                  <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length || quizAlreadyGenerated}>
+                    {generatingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                    {generatingQuiz ? "Generating..." : quizAlreadyGenerated ? "Quiz Generated" : "Generate Quiz"}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">AI decides question count (max 10).</span>
+                </div>
+
+                {quizStatusMessage && <p className="text-sm text-primary mb-3">{quizStatusMessage}</p>}
+
+                <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                  {!quizzes.length && <div className="text-sm text-muted-foreground">No generated quizzes yet.</div>}
+                  {quizzes.map((quiz) => {
+                    const completed = quiz.attemptCount > 0;
+                    const takeDisabled = !activeTopicSession || completed;
+                    return (
+                      <div key={quiz.id} className="w-full border rounded-lg p-3 border-border">
+                        <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {quiz.questions.length} questions · created {new Date(quiz.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Attempts: {quiz.attemptCount}
+                          {quiz.lastAttempt ? ` · latest ${quiz.lastAttempt.score}/${quiz.lastAttempt.total}` : ""}
+                        </div>
+                        <div className="mt-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={takeDisabled}
+                            onClick={() => handleTakeQuiz(quiz)}
+                          >
+                            {completed ? "Completed" : activeTopicSession ? "Take Quiz" : "Start Session to Unlock"}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
-            {quizStatusMessage && <p className="text-sm text-primary mb-3">{quizStatusMessage}</p>}
-
-            <div className="space-y-2 max-h-56 overflow-auto pr-1">
-              {!quizzes.length && <div className="text-sm text-muted-foreground">No generated quizzes yet.</div>}
-              {quizzes.map((quiz) => {
-                const completed = quiz.attemptCount > 0;
-                const takeDisabled = !hasStartedTopicSession || completed;
-                return (
-                  <div key={quiz.id} className="w-full border rounded-lg p-3 border-border">
-                    <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {quiz.questions.length} questions · created {new Date(quiz.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Attempts: {quiz.attemptCount}
-                      {quiz.lastAttempt ? ` · latest ${quiz.lastAttempt.score}/${quiz.lastAttempt.total}` : ""}
-                    </div>
-                    <div className="mt-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={takeDisabled}
-                        onClick={() => handleTakeQuiz(quiz)}
-                      >
-                        {completed ? "Completed" : hasStartedTopicSession ? "Take Quiz" : "Start Session to Unlock"}
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         </div>
 
@@ -526,7 +548,7 @@ export default function TopicDetail() {
             {attempts.map((quiz) => (
               <div key={quiz.id} className="flex items-center justify-between p-4 border border-border rounded-lg">
                 <div className="flex-1">
-                  <div className="font-medium text-foreground">{quiz.nextQuizType}</div>
+                  <div className="font-medium text-foreground">{topicName} Quiz</div>
                   <div className="text-sm text-muted-foreground">
                     {new Date(quiz.submittedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                   </div>
@@ -556,7 +578,7 @@ export default function TopicDetail() {
                   {new Date(topic.nextReviewAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                 </div>
                 <div className="w-2 h-2 rounded-full bg-warning flex-shrink-0" />
-                <div className="font-medium text-foreground">Spaced Repetition Review</div>
+                <div className="font-medium text-foreground">Reminder to do your flashcards!</div>
               </div>
               {state?.examPlans[moduleName] && (
                 <div className="flex items-center gap-3 p-3 border border-border rounded-lg">

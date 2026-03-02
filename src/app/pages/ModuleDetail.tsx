@@ -6,18 +6,11 @@ import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Checkbox } from "../components/ui/checkbox";
-import { ArrowLeft, Clock, CheckCircle2, Calendar, Plus, Upload, ChevronDown, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Calendar, Plus, Upload, ChevronDown, X } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { addTopic } from "../lib/api";
 import { daysUntil, formatDate } from "../lib/format";
-
-function dueInLabel(dateIso: string) {
-  const days = daysUntil(dateIso);
-  if (days === 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return `In ${days} days`;
-}
 
 export default function ModuleDetail() {
   const { moduleId } = useParams();
@@ -60,11 +53,6 @@ export default function ModuleDetail() {
       })
       .sort((a, b) => a.masteryPct - b.masteryPct);
   }, [moduleState, state, moduleName]);
-
-  const spacedRepetition = useMemo(
-    () => [...topics].sort((a, b) => new Date(a.nextReviewAt).getTime() - new Date(b.nextReviewAt).getTime()).slice(0, 6),
-    [topics],
-  );
 
   const [showAddExamDialog, setShowAddExamDialog] = useState(false);
   const [showAddTopicDialog, setShowAddTopicDialog] = useState(false);
@@ -396,28 +384,6 @@ export default function ModuleDetail() {
             </div>
           </div>
         )}
-
-        <div className="bg-card border border-border rounded-lg p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Clock className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-foreground text-lg">Spaced Repetition Queue</h3>
-          </div>
-
-          <div className="space-y-3">
-            {!spacedRepetition.length && <div className="text-sm text-muted-foreground">No topics yet. Add topics and complete quizzes.</div>}
-            {spacedRepetition.map((item) => (
-              <div key={item.id} className="flex items-center justify-between p-4 border border-border rounded-lg hover:bg-muted/50 transition-colors">
-                <div>
-                  <div className="font-medium text-foreground">{item.name}</div>
-                  <div className="text-sm text-muted-foreground">Due: {dueInLabel(item.nextReviewAt)}</div>
-                </div>
-                <Button variant="outline" size="sm" onClick={() => navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${item.id}`)}>
-                  Review Now
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
 
         <div className="bg-card border border-border rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
