@@ -101,6 +101,8 @@ const MAX_AI_QUIZ_QUESTIONS = 10;
 const SPACED_REVIEW_DURATION_MINUTES = 15;
 const SPACED_REVIEW_FLASHCARD_COUNT = 8;
 const SPACED_REVIEW_MINI_QUIZ_COUNT = 4;
+const PERSONA_MIN_DAYS_BETWEEN_UPDATES = clamp(Number(process.env.PERSONA_MIN_DAYS_BETWEEN_UPDATES || 4), 1, 30);
+const PERSONA_FORCE_REFRESH_DAYS = clamp(Number(process.env.PERSONA_FORCE_REFRESH_DAYS || 14), 3, 90);
 const GROUNDING_STOPWORDS = new Set([
   'about', 'after', 'again', 'against', 'almost', 'also', 'among', 'and', 'another', 'because', 'before',
   'being', 'between', 'both', 'could', 'does', 'each', 'from', 'have', 'having', 'here', 'into', 'itself',
@@ -139,6 +141,7 @@ function ensureDataFile() {
       quizAttempts: [],
       examPlans: {},
       onboardingPersona: null,
+      personaProfile: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -195,6 +198,7 @@ function emptyState() {
     quizAttempts: [],
     examPlans: {},
     onboardingPersona: null,
+    personaProfile: null,
     topicDocuments: [],
     generatedQuizzes: [],
     generatedQuizAttempts: [],
@@ -233,6 +237,8 @@ function normalizeData(data) {
     tabEvents: Array.isArray(base.tabEvents) ? base.tabEvents : [],
     quizAttempts: Array.isArray(base.quizAttempts) ? base.quizAttempts : [],
     examPlans: base.examPlans && typeof base.examPlans === 'object' ? base.examPlans : {},
+    onboardingPersona: sanitizePersonaAnalysis(base.onboardingPersona) || null,
+    personaProfile: sanitizePersonaProfile(base.personaProfile) || null,
     topicDocuments: Array.isArray(base.topicDocuments) ? base.topicDocuments : [],
     generatedQuizzes: Array.isArray(base.generatedQuizzes) ? base.generatedQuizzes : [],
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
@@ -808,6 +814,30 @@ function buildAdaptiveDifficultyPlan(currentMasteryPct, preScore, decayRatePct) 
 
   return {
     currentMasteryPct: Math.round(current),
+    targetMasteryPct: Math.round(targetMasteryPct),
+    targetPostScore: Math.round(targetPostScore),
+    requiredGainPct: Math.round(requiredGainPct),
+    difficulty,
+  };
+}
+
+function progressiveQuizDifficultyFromCompletedCount(completedCount) {
+  const count = Math.max(0, Math.floor(Number(completedCount) || 0));
+  if (count <= 0) return 'easy';
+  if (count === 1) return 'medium';
+  return 'hard';
+}
+
+function applyProgressiveDifficultyPlan(basePlan, completedCount) {
+  const base = basePlan && typeof basePlan === 'object' ? basePlan : {};
+  const difficulty = progressiveQuizDifficultyFromCompletedCount(completedCount);
+  const lift = difficulty === 'medium' ? 5 : difficulty === 'hard' ? 10 : 0;
+  const currentMasteryPct = clamp(Number(base.currentMasteryPct || 0), 0, 100);
+  const targetMasteryPct = clamp(Number(base.targetMasteryPct || currentMasteryPct) + lift, 0, 100);
+  const targetPostScore = clamp(Number(base.targetPostScore || currentMasteryPct) + lift, 0, 100);
+  const requiredGainPct = clamp(Math.max(0, targetMasteryPct - currentMasteryPct), 0, 100);
+  return {
+    currentMasteryPct: Math.round(currentMasteryPct),
     targetMasteryPct: Math.round(targetMasteryPct),
     targetPostScore: Math.round(targetPostScore),
     requiredGainPct: Math.round(requiredGainPct),
@@ -1583,6 +1613,287 @@ async function buildOnboardingPersonaWithOpenAI(payload) {
   }
 }
 
+function sanitizePersonaTechnique(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = String(raw.title || '').trim();
+  const description = String(raw.description || '').trim();
+  if (!title || !description) return null;
+  return { title, description };
+}
+
+function sanitizePersonaAnalysis(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const learningStyle = String(raw.learningStyle || '').trim();
+  const rationale = String(raw.rationale || '').trim();
+  const studyTechniques = Array.isArray(raw.studyTechniques)
+    ? raw.studyTechniques.map(sanitizePersonaTechnique).filter(Boolean).slice(0, 5)
+    : [];
+  if (!learningStyle || !rationale || !studyTechniques.length) return null;
+  return {
+    learningStyle,
+    rationale,
+    studyTechniques,
+  };
+}
+
+function sanitizePersonaProfile(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const base = sanitizePersonaAnalysis(raw);
+  if (!base) return null;
+  const updatedAtRaw = String(raw.updatedAt || '').trim();
+  const updatedAt = Number.isFinite(new Date(updatedAtRaw).getTime()) ? new Date(updatedAtRaw).toISOString() : nowIso();
+  const source = String(raw.source || '').trim() || 'heuristic-evolution';
+  const evidenceRaw = raw.evidenceSnapshot && typeof raw.evidenceSnapshot === 'object' ? raw.evidenceSnapshot : {};
+  const evidenceSnapshot = {
+    studySessions: Math.max(0, Number(evidenceRaw.studySessions || 0)),
+    quizAttempts: Math.max(0, Number(evidenceRaw.quizAttempts || 0)),
+    tabEvents: Math.max(0, Number(evidenceRaw.tabEvents || 0)),
+  };
+  return {
+    ...base,
+    updatedAt,
+    source,
+    evidenceSnapshot,
+  };
+}
+
+function personaEvidenceSnapshot(data) {
+  const sessions = (data.studySessions || []).filter((s) => s && s.endAt);
+  const attempts = Array.isArray(data.quizAttempts) ? data.quizAttempts : [];
+  const tabEvents = Array.isArray(data.tabEvents) ? data.tabEvents : [];
+
+  const moduleEntries = Object.entries(data.modules || {});
+  const behaviorCounts = {};
+  const burnoutValues = [];
+  const focusValues = [];
+
+  for (const [moduleName] of moduleEntries) {
+    const mod = moduleState(data, moduleName);
+    const behaviorType = String(mod.behaviorType || 'Adaptive Mixed Learner');
+    behaviorCounts[behaviorType] = (behaviorCounts[behaviorType] || 0) + 1;
+    burnoutValues.push(Number(mod.burnoutRisk || 0));
+    focusValues.push(Number(mod.focusEfficiency || 0));
+  }
+
+  const meanQuiz = attempts.length
+    ? attempts.reduce((sum, item) => sum + Number(item.postScore || 0), 0) / attempts.length
+    : 0;
+  const recentAttempts = attempts.slice(-12);
+  const recentMeanQuiz = recentAttempts.length
+    ? recentAttempts.reduce((sum, item) => sum + Number(item.postScore || 0), 0) / recentAttempts.length
+    : 0;
+
+  const distraction = tabEvents.filter((e) => e.eventType === 'distraction').length;
+  const learning = tabEvents.filter((e) => e.eventType === 'learning').length;
+  const help = tabEvents.filter((e) => e.eventType === 'help').length;
+  const totalSignals = Math.max(1, distraction + learning + help);
+
+  return {
+    studySessions: sessions.length,
+    quizAttempts: attempts.length,
+    tabEvents: tabEvents.length,
+    meanQuizScore: Math.round(meanQuiz),
+    recentMeanQuizScore: Math.round(recentMeanQuiz),
+    avgBurnoutRisk: Math.round(burnoutValues.length ? burnoutValues.reduce((a, b) => a + b, 0) / burnoutValues.length : 0),
+    avgFocusEfficiency: Math.round(focusValues.length ? focusValues.reduce((a, b) => a + b, 0) / focusValues.length : 0),
+    distractionRatio: Number((distraction / totalSignals).toFixed(3)),
+    focusRatio: Number((learning / totalSignals).toFixed(3)),
+    behaviorCounts,
+  };
+}
+
+function hasSufficientPersonaEvidence(evidence) {
+  return evidence.studySessions >= 3 && evidence.quizAttempts >= 3;
+}
+
+function shouldRefreshPersonaProfile(currentProfile, evidence) {
+  if (!currentProfile) return hasSufficientPersonaEvidence(evidence);
+
+  const updatedAt = String(currentProfile.updatedAt || '');
+  const daysSince = daysBetween(updatedAt || nowIso(), nowIso());
+  if (daysSince < PERSONA_MIN_DAYS_BETWEEN_UPDATES) return false;
+
+  const previous = currentProfile.evidenceSnapshot || {};
+  const newSessions = evidence.studySessions - Number(previous.studySessions || 0);
+  const newAttempts = evidence.quizAttempts - Number(previous.quizAttempts || 0);
+  const newTabEvents = evidence.tabEvents - Number(previous.tabEvents || 0);
+
+  if (newAttempts >= 3 || newSessions >= 5 || newTabEvents >= 120) return true;
+  if (daysSince >= PERSONA_FORCE_REFRESH_DAYS && hasSufficientPersonaEvidence(evidence)) return true;
+  return false;
+}
+
+function buildStudyPersonaHeuristic(data, currentProfile, onboardingPersona) {
+  const evidence = personaEvidenceSnapshot(data);
+  const behaviorCounts = evidence.behaviorCounts || {};
+  const dominantBehavior = Object.entries(behaviorCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+  let learningStyle = currentProfile?.learningStyle || onboardingPersona?.learningStyle || 'Adaptive Mixed Learner';
+  if (dominantBehavior === 'Steady Deep Learner') learningStyle = 'Steady Deep Learner';
+  else if (dominantBehavior === 'Distractible Explorer') learningStyle = 'Focus-Recovery Learner';
+  else if (dominantBehavior === 'Sprint-and-Crash' || dominantBehavior === 'Overloaded Striver') {
+    learningStyle = 'Intensity-Regulated Learner';
+  }
+
+  const rationale = `Based on your recent study behavior (focus ${evidence.avgFocusEfficiency}%, burnout ${evidence.avgBurnoutRisk}%, quizzes ${evidence.recentMeanQuizScore}%), your current pattern is best described as ${learningStyle}.`;
+  const techniques = [
+    {
+      title: 'Stabilize with consistent blocks',
+      description: 'Use 30-45 minute focus blocks and preserve recovery breaks between blocks.',
+    },
+    {
+      title: 'Prioritize weak-topic retrieval',
+      description: 'Start each session with 1-2 weak topics using active recall before rereading.',
+    },
+    {
+      title: 'Close with quick error log',
+      description: 'Capture recurring mistakes and revisit them in the next spaced revision cycle.',
+    },
+    {
+      title: 'Manage workload by energy',
+      description: evidence.avgBurnoutRisk >= 60
+        ? 'Reduce intensity temporarily and emphasize light review when burnout rises.'
+        : 'Schedule harder tasks in high-focus periods and lighter review in low-energy periods.',
+    },
+  ];
+
+  if (evidence.distractionRatio >= 0.28) {
+    techniques[3] = {
+      title: 'Add distraction guardrails',
+      description: 'Use site blocking and keep your phone out of reach during deep study blocks.',
+    };
+  }
+
+  return {
+    learningStyle,
+    rationale,
+    studyTechniques: techniques,
+  };
+}
+
+async function buildStudyPersonaWithOpenAI(data, currentProfile, onboardingPersona) {
+  if (!OPENAI_API_KEY) return buildStudyPersonaHeuristic(data, currentProfile, onboardingPersona);
+
+  const evidence = personaEvidenceSnapshot(data);
+  const modulePayload = Object.entries(data.modules || {}).map(([moduleName]) => {
+    const mod = moduleState(data, moduleName);
+    return {
+      moduleName,
+      behaviorType: mod.behaviorType || 'Adaptive Mixed Learner',
+      burnoutRisk: Math.round(mod.burnoutRisk || 0),
+      focusEfficiency: Math.round(mod.focusEfficiency || 0),
+      topics: Object.values(mod.topics || {}).map((topic) => ({
+        topicName: topic.topicName,
+        masteryPct: Math.round(masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery)),
+      })),
+    };
+  });
+
+  const payload = {
+    currentPersona: currentProfile || null,
+    onboardingPersona: onboardingPersona || null,
+    evidence,
+    modules: modulePayload,
+  };
+
+  try {
+    const prompt = [
+      'You are an educational learning-science coach. Return strict JSON only.',
+      'Required JSON shape: { "learningStyle": string, "rationale": string, "studyTechniques": [{ "title": string, "description": string }] }',
+      'Return exactly 4 to 5 studyTechniques.',
+      'Do not change learningStyle unless there is clear sustained evidence across recent behavior metrics.',
+      'If evidence is mixed, keep the existing learningStyle and update rationale/techniques instead.',
+      'Make rationale concrete using focus, burnout, and quiz trends.',
+      JSON.stringify(payload),
+    ].join('\n');
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) return buildStudyPersonaHeuristic(data, currentProfile, onboardingPersona);
+    const result = await response.json();
+    const parsed = extractJsonObject(readResponseText(result));
+    const normalized = sanitizePersonaAnalysis(parsed);
+    if (!normalized) return buildStudyPersonaHeuristic(data, currentProfile, onboardingPersona);
+    return normalized;
+  } catch {
+    return buildStudyPersonaHeuristic(data, currentProfile, onboardingPersona);
+  }
+}
+
+async function maybeRefreshStudyPersonaProfile(data) {
+  const onboardingPersona = sanitizePersonaAnalysis(data.onboardingPersona) || null;
+  if (onboardingPersona) data.onboardingPersona = onboardingPersona;
+
+  const evidence = personaEvidenceSnapshot(data);
+  const now = nowIso();
+  const existing = sanitizePersonaProfile(data.personaProfile) || null;
+
+  if (!existing) {
+    if (onboardingPersona) {
+      data.personaProfile = {
+        ...onboardingPersona,
+        source: 'onboarding',
+        updatedAt: now,
+        evidenceSnapshot: {
+          studySessions: evidence.studySessions,
+          quizAttempts: evidence.quizAttempts,
+          tabEvents: evidence.tabEvents,
+        },
+      };
+      return true;
+    }
+    if (!hasSufficientPersonaEvidence(evidence)) return false;
+
+    const generated = await buildStudyPersonaWithOpenAI(data, null, null);
+    data.personaProfile = {
+      ...generated,
+      source: OPENAI_API_KEY ? 'ai-evolution' : 'heuristic-evolution',
+      updatedAt: now,
+      evidenceSnapshot: {
+        studySessions: evidence.studySessions,
+        quizAttempts: evidence.quizAttempts,
+        tabEvents: evidence.tabEvents,
+      },
+    };
+    return true;
+  }
+
+  data.personaProfile = existing;
+  if (!shouldRefreshPersonaProfile(existing, evidence)) return false;
+
+  const generated = await buildStudyPersonaWithOpenAI(data, existing, onboardingPersona);
+  const previous = existing.evidenceSnapshot || {};
+  const newSessions = evidence.studySessions - Number(previous.studySessions || 0);
+  const newAttempts = evidence.quizAttempts - Number(previous.quizAttempts || 0);
+  const allowStyleChange = newAttempts >= 5 || newSessions >= 7;
+
+  data.personaProfile = {
+    learningStyle: allowStyleChange ? generated.learningStyle : existing.learningStyle,
+    rationale: generated.rationale,
+    studyTechniques: generated.studyTechniques,
+    source: OPENAI_API_KEY ? 'ai-evolution' : 'heuristic-evolution',
+    updatedAt: now,
+    evidenceSnapshot: {
+      studySessions: evidence.studySessions,
+      quizAttempts: evidence.quizAttempts,
+      tabEvents: evidence.tabEvents,
+    },
+  };
+
+  return true;
+}
+
 async function buildInsightsWithOpenAI(data, moduleName) {
   if (!OPENAI_API_KEY) return buildInsightsHeuristic(data, moduleName);
   const allModuleNames = Object.keys(data.modules);
@@ -1938,6 +2249,7 @@ async function buildChatWithOpenAI(data, userMessage, history = [], context = {}
   const docSources = Array.isArray(context.docSources) ? context.docSources : [];
   const lower = String(userMessage || '').toLowerCase();
   const asksForNotes = /notes|lecture|pdf|slide|explain|summari|what is|what's|define|concept/.test(lower);
+  const wantsSummary = /summari|summarize|summarise|recap|overview/.test(lower);
   if (!docContext && asksForNotes) {
     return 'I cannot read usable text from your uploaded notes yet, so I will not guess content. Re-upload as text-based PDF/DOCX/MD/TXT, or install OCR (Tesseract + Poppler: pdftoppm/pdftotext) and re-upload the same file.';
   }
@@ -1978,7 +2290,11 @@ async function buildChatWithOpenAI(data, userMessage, history = [], context = {}
     const prompt = [
       'You are Dino Coach, a concise study copilot with occasional dinosaur puns and humour where appropriate.',
       'Keep responses practical, supportive, and specific to the provided learning data.',
-      'Limit to about 4-6 short sentences, with clear next actions.',
+      'Use clear plain-text formatting. Never output one dense paragraph.',
+      'Use short section headers and bullet points. Separate sections with a blank line.',
+      wantsSummary
+        ? 'If the user asks for a summary, use this structure exactly: "Lecture Summary", "Key Points", and "Next Steps", with concise bullets under each.'
+        : 'For normal replies, include a short "Quick Answer" section and a short "Next Steps" section.',
       'If noteContext is provided and relevant, answer using it and mention source module/topic/file.',
       'If noteContext is empty, never infer or guess lecture content. Explicitly say extraction is unavailable and give short remediation steps.',
       'Be proactive: if proactiveUpdates contains high severity items, surface one short warning first.',
@@ -3044,6 +3360,15 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
   const maxQuestions = clamp(Math.round(requestedMax), 1, MAX_AI_QUIZ_QUESTIONS);
   const requestedMin = Number.isFinite(options.minQuestions) ? Number(options.minQuestions) : MIN_AI_QUIZ_QUESTIONS;
   const minQuestions = clamp(Math.round(requestedMin), 1, maxQuestions);
+  const excludedQuestionFingerprints = new Set(
+    (Array.isArray(options.excludedQuestionFingerprints) ? options.excludedQuestionFingerprints : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  );
+  const avoidQuestionTexts = (Array.isArray(options.avoidQuestionTexts) ? options.avoidQuestionTexts : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .slice(0, 80);
 
   const context = documents
     .map((doc, idx) => {
@@ -3057,9 +3382,27 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
     throw new Error('Uploaded files did not provide usable text context for AI quiz generation.');
   }
 
+  const rawDifficulty = String(difficultyPlan?.difficulty || 'medium').trim().toLowerCase();
+  const difficulty = rawDifficulty === 'easy' || rawDifficulty === 'hard' ? rawDifficulty : 'medium';
   const difficultyLine = difficultyPlan
-    ? `Difficulty target: ${difficultyPlan.difficulty}. Current mastery ${difficultyPlan.currentMasteryPct}%, target mastery ${difficultyPlan.targetMasteryPct}%, target quiz score ${difficultyPlan.targetPostScore}%.`
-    : 'Difficulty target: medium.';
+    ? `Difficulty target: ${difficulty}. Current mastery ${difficultyPlan.currentMasteryPct}%, target mastery ${difficultyPlan.targetMasteryPct}%, target quiz score ${difficultyPlan.targetPostScore}%.`
+    : `Difficulty target: ${difficulty}.`;
+  const difficultyGuidance = difficulty === 'easy'
+    ? 'Difficulty guidance: prioritize foundational recall and basic comprehension. Keep multi-step reasoning minimal.'
+    : difficulty === 'medium'
+      ? 'Difficulty guidance: use mixed conceptual + application questions, including multi-step reasoning and short scenario transfer.'
+      : 'Difficulty guidance: emphasize challenging scenario-based and synthesis questions with multi-step reasoning and plausible distractors.';
+  const extensionGuidance = difficulty === 'easy'
+    ? 'Extension guidance: optional extension questions (0-1). Most questions should map directly to notes.'
+    : difficulty === 'medium'
+      ? 'Extension guidance: include some extension/application questions beyond exact note wording (up to about 30%), while keeping them topic-relevant.'
+      : 'Extension guidance: include substantial extension questions beyond exact note wording (up to about 50%), while staying within module/topic scope.';
+  const avoidQuestionBlock = avoidQuestionTexts.length
+    ? [
+      'Do NOT repeat or closely paraphrase these previously used questions:',
+      ...avoidQuestionTexts.map((question, idx) => `${idx + 1}. ${question}`),
+    ].join('\n')
+    : '';
 
   const contextLower = context.toLowerCase();
   const contextNormalized = normalizeMatchText(contextLower);
@@ -3075,18 +3418,23 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
       'You are a strict quiz generator for students.',
       'Return JSON only. No markdown.',
       'Expected JSON shape:',
-      '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string, "evidenceQuote": string }] }',
+      '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string, "evidenceQuote": string, "sourceType": "grounded"|"extension" }] }',
       `Choose the number of questions yourself based on document breadth and complexity. Use between ${minQuestions} and ${maxQuestions} questions.`,
       `Module: ${moduleName}`,
       `Topic: ${topicName}`,
       difficultyLine,
+      difficultyGuidance,
+      extensionGuidance,
       retryLine,
+      avoidQuestionBlock,
       'Rules:',
-      '- Use only the provided documents.',
-      '- Every question must test understanding of the document content.',
+      '- Use provided documents as the primary knowledge source.',
+      '- Questions may include topic-relevant extension/application scenarios beyond the notes when appropriate for difficulty.',
+      '- Every question must stay relevant to the module/topic and test meaningful understanding.',
       '- Questions must be diverse; avoid repeating the same stem/pattern.',
       '- Never ask meta questions about notes/documents (e.g., "was this word in the notes").',
-      '- Include evidenceQuote as a short quote grounded in the provided documents that supports the correct answer.',
+      '- For grounded questions, include evidenceQuote as a short quote from provided documents that supports the correct answer.',
+      '- For extension questions, evidenceQuote can be empty or brief.',
       '- Keep options plausible and avoid trick ambiguity.',
       '- answerIndex must be 0..3 and match the correct option.',
       'Documents:',
@@ -3103,7 +3451,7 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
         body: JSON.stringify({
           model: OPENAI_MODEL,
           input: prompt,
-          temperature: 0.15,
+          temperature: difficulty === 'easy' ? 0.2 : difficulty === 'medium' ? 0.35 : 0.45,
         }),
       });
 
@@ -3122,14 +3470,33 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
         continue;
       }
 
-      const groundedRaw = parsed.questions.filter(
-        (q) => !isMetaNotesQuestion(q?.question) && hasGroundingEvidence(q, contextLower, contextTokenSet, contextNormalized),
-      );
-      const uniqueGrounded = dedupeGroundedQuestions(groundedRaw, maxQuestions);
-      const questions = normalizeQuestions(uniqueGrounded, maxQuestions);
+      const candidateRaw = parsed.questions.filter((q) => !isMetaNotesQuestion(q?.question));
+      const nonRepeated = candidateRaw.filter((q) => {
+        const key = questionFingerprint(q);
+        if (!key) return false;
+        return !excludedQuestionFingerprints.has(key);
+      });
+      const uniqueCandidates = dedupeGroundedQuestions(nonRepeated, maxQuestions * 3);
+      const groundedRaw = uniqueCandidates.filter((q) => hasGroundingEvidence(q, contextLower, contextTokenSet, contextNormalized));
+      const extensionRaw = uniqueCandidates.filter((q) => !hasGroundingEvidence(q, contextLower, contextTokenSet, contextNormalized));
+
+      const minGrounded = difficulty === 'easy'
+        ? Math.max(1, Math.ceil(minQuestions * 0.6))
+        : difficulty === 'medium'
+          ? Math.max(1, Math.ceil(minQuestions * 0.35))
+          : Math.max(1, Math.ceil(minQuestions * 0.2));
+      if (groundedRaw.length < minGrounded) {
+        lastFailure = `insufficient grounded diversity (${groundedRaw.length}/${minGrounded})`;
+        continue;
+      }
+
+      const prioritized = difficulty === 'hard'
+        ? [...extensionRaw, ...groundedRaw]
+        : [...groundedRaw, ...extensionRaw];
+      const questions = normalizeQuestions(prioritized, maxQuestions);
 
       if (questions.length < minQuestions) {
-        lastFailure = `only ${questions.length} grounded unique questions were produced`;
+        lastFailure = `only ${questions.length} unique non-repeated questions were produced`;
         continue;
       }
 
@@ -3144,7 +3511,7 @@ async function buildAiQuiz(moduleName, topicName, documents, difficultyPlan = nu
     }
   }
 
-  throw new Error(`AI quiz generation failed to produce grounded questions from uploaded files (${lastFailure}). Please try again; if this persists, re-upload the notes for this topic so text extraction refreshes.`);
+  throw new Error(`AI quiz generation failed to produce enough unique higher-difficulty questions (${lastFailure}). Please retry generation.`);
 }
 
 function buildHeuristicFlashcards(moduleName, topicName, documents, maxCards = SPACED_REVIEW_FLASHCARD_COUNT) {
@@ -3362,6 +3729,43 @@ function serializeQuizForClient(quiz, includeAnswers = false) {
   };
 }
 
+function attachQuizDifficultyMetadata(quizzes) {
+  const list = Array.isArray(quizzes) ? quizzes.slice() : [];
+  if (!list.length) return [];
+
+  const sortedAsc = list
+    .slice()
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const inferredById = new Map();
+
+  sortedAsc.forEach((quiz, index) => {
+    inferredById.set(quiz.id, progressiveQuizDifficultyFromCompletedCount(index));
+  });
+
+  return list.map((quiz) => {
+    const existing = quiz && quiz.difficultyPlan && typeof quiz.difficultyPlan === 'object'
+      ? quiz.difficultyPlan
+      : null;
+    const fallbackDifficulty = inferredById.get(quiz.id) || 'medium';
+    const difficulty = String(existing?.difficulty || fallbackDifficulty).toLowerCase();
+    const currentMasteryPct = clamp(Number(existing?.currentMasteryPct || 0), 0, 100);
+    const targetMasteryPct = clamp(Number(existing?.targetMasteryPct || currentMasteryPct), 0, 100);
+    const targetPostScore = clamp(Number(existing?.targetPostScore || currentMasteryPct), 0, 100);
+    const requiredGainPct = clamp(Number(existing?.requiredGainPct || Math.max(0, targetMasteryPct - currentMasteryPct)), 0, 100);
+
+    return {
+      ...quiz,
+      difficultyPlan: {
+        currentMasteryPct: Math.round(currentMasteryPct),
+        targetMasteryPct: Math.round(targetMasteryPct),
+        targetPostScore: Math.round(targetPostScore),
+        requiredGainPct: Math.round(requiredGainPct),
+        difficulty: ['easy', 'medium', 'hard'].includes(difficulty) ? difficulty : fallbackDifficulty,
+      },
+    };
+  });
+}
+
 async function createTopicQuiz(userId, quizRecord, data) {
   if (!SUPABASE_ENABLED) {
     const row = {
@@ -3418,6 +3822,7 @@ async function createTopicQuiz(userId, quizRecord, data) {
     questions: Array.isArray(row.questions) ? row.questions : [],
     sourceDocumentIds: Array.isArray(row.source_document_ids) ? row.source_document_ids : [],
     createdAt: row.created_at,
+    difficultyPlan: quizRecord.difficultyPlan || null,
     attempts: [],
     attemptCount: 0,
     lastAttempt: null,
@@ -3458,32 +3863,6 @@ async function getQuizById(userId, quizId, data) {
     sourceDocumentIds: Array.isArray(row.source_document_ids) ? row.source_document_ids : [],
     createdAt: row.created_at,
   };
-}
-
-async function hasQuizAttempt(userId, quizId, data) {
-  if (!quizId) return false;
-  if (!SUPABASE_ENABLED) {
-    return data.generatedQuizAttempts.some((attempt) => attempt.quizId === quizId);
-  }
-
-  const params = new URLSearchParams({
-    select: 'id',
-    user_id: `eq.${userId}`,
-    quiz_id: `eq.${quizId}`,
-    limit: '1',
-  });
-
-  const res = await supabaseRequest(`/rest/v1/topic_quiz_attempts?${params.toString()}`, {
-    useServiceRole: true,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to check quiz attempts: ${withSupabaseSetupHint(supabaseErrorText(res.status, text))}`);
-  }
-
-  const rows = await res.json();
-  return Array.isArray(rows) && rows.length > 0;
 }
 
 async function saveQuizAttempt(userId, payload, data) {
@@ -3556,7 +3935,7 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
       attemptsByQuiz.set(attempt.quizId, list);
     }
 
-    return data.generatedQuizzes
+    const quizzes = data.generatedQuizzes
       .filter((x) => x.moduleName === moduleName && x.topicName === topicName)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .map((quiz) => {
@@ -3570,6 +3949,7 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
           lastAttempt: attempts[0] || null,
         };
       });
+    return attachQuizDifficultyMetadata(quizzes);
   }
 
   const quizParams = new URLSearchParams({
@@ -3625,7 +4005,7 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
     attemptsByQuiz.set(quizId, list);
   }
 
-  return quizzes.map((row) => {
+  const merged = quizzes.map((row) => {
     const quizAttempts = attemptsByQuiz.get(row.id) || [];
     return {
       id: row.id,
@@ -3640,6 +4020,7 @@ async function listTopicQuizzes(userId, moduleName, topicName, data) {
       lastAttempt: quizAttempts[0] || null,
     };
   });
+  return attachQuizDifficultyMetadata(merged);
 }
 
 async function deleteTopicQuizzes(userId, moduleName, topicName, data) {
@@ -3764,6 +4145,12 @@ function evaluateQuiz(quiz, answersInput) {
 
 function hasStartedTopicSession(data, moduleName, topicName) {
   return data.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName);
+}
+
+function hasCompletedTopicSession(data, moduleName, topicName) {
+  return data.studySessions.some(
+    (session) => session.moduleName === moduleName && session.topicName === topicName && Boolean(session.endAt),
+  );
 }
 
 function latestTopicSession(data, moduleName, topicName) {
@@ -4041,6 +4428,7 @@ async function apiHandler(req, res, parsedUrl) {
   if (req.method === 'GET' && pathname === '/api/state') {
     await syncTopicDocumentSummaries(user.id, data);
     for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    await maybeRefreshStudyPersonaProfile(data);
     await saveDataForUser(user.id, data);
     return send(res, 200, { ...data, aiEnabled: Boolean(OPENAI_API_KEY), supabaseEnabled: SUPABASE_ENABLED });
   }
@@ -4068,6 +4456,9 @@ async function apiHandler(req, res, parsedUrl) {
       modules: normalizedModules,
     };
 
+    const onboardingPersona = sanitizePersonaAnalysis(body.onboardingPersona);
+    if (onboardingPersona) data.onboardingPersona = onboardingPersona;
+
     const allowed = new Set(normalizedModules);
 
     const removedModules = [...previousModules].filter((moduleName) => !allowed.has(moduleName));
@@ -4088,6 +4479,7 @@ async function apiHandler(req, res, parsedUrl) {
     data.spacedReviewRuns = (data.spacedReviewRuns || []).filter((x) => allowed.has(x.moduleName));
 
     for (const moduleName of normalizedModules) moduleState(data, moduleName);
+    await maybeRefreshStudyPersonaProfile(data);
     await saveDataForUser(user.id, data);
     return send(res, 200, { ok: true, profile: data.profile });
   }
@@ -4591,11 +4983,28 @@ async function apiHandler(req, res, parsedUrl) {
     const topicName = String(body.topicName || '').trim();
 
     if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
-    if (!hasStartedTopicSession(data, moduleName, topicName)) {
+    if (!hasCompletedTopicSession(data, moduleName, topicName)) {
       return send(res, 400, {
-        error: 'Start a study session timer for this topic before generating an AI quiz.',
+        error: 'Complete a study session for this topic before generating an AI quiz.',
       });
     }
+
+    const existingQuizzes = await listTopicQuizzes(user.id, moduleName, topicName, data);
+    const pendingQuiz = existingQuizzes.find((quiz) => Number(quiz.attemptCount || 0) === 0);
+    if (pendingQuiz) {
+      return send(res, 409, {
+        error: 'Complete your current generated quiz before creating the next, higher-difficulty quiz.',
+      });
+    }
+    const completedQuizCount = existingQuizzes.filter((quiz) => Number(quiz.attemptCount || 0) > 0).length;
+    const previousQuestionTexts = existingQuizzes
+      .flatMap((quiz) => (Array.isArray(quiz.questions) ? quiz.questions : []))
+      .map((question) => String(question?.question || '').trim())
+      .filter(Boolean)
+      .slice(0, 120);
+    const previousQuestionFingerprints = previousQuestionTexts
+      .map((questionText) => questionFingerprint({ question: questionText }))
+      .filter(Boolean);
 
     const generationAt = nowIso();
     const dueRetryItems = dueRetryQueueForTopic(data, moduleName, topicName, generationAt).slice(0, MAX_AI_QUIZ_QUESTIONS);
@@ -4628,7 +5037,8 @@ async function apiHandler(req, res, parsedUrl) {
     const snapshot = computeMasteryWithDecay(topic, nowIso());
     const masteryPct = snapshot.masteryCurrent;
     const decayRatePct = snapshot.decayPerDay;
-    const difficultyPlan = buildAdaptiveDifficultyPlan(masteryPct, masteryPct, decayRatePct);
+    const baseDifficultyPlan = buildAdaptiveDifficultyPlan(masteryPct, masteryPct, decayRatePct);
+    const difficultyPlan = applyProgressiveDifficultyPlan(baseDifficultyPlan, completedQuizCount);
 
     const remainingCapacity = Math.max(0, MAX_AI_QUIZ_QUESTIONS - retryRawQuestions.length);
     let built = null;
@@ -4641,6 +5051,8 @@ async function apiHandler(req, res, parsedUrl) {
         built = await buildAiQuiz(moduleName, topicName, docsWithText, difficultyPlan, {
           minQuestions: Math.min(minQuestions, remainingCapacity),
           maxQuestions: remainingCapacity,
+          excludedQuestionFingerprints: previousQuestionFingerprints,
+          avoidQuestionTexts: previousQuestionTexts,
         });
         aiRawQuestions = built.questions.map((question) => ({
           question: question.question,
@@ -4706,13 +5118,6 @@ async function apiHandler(req, res, parsedUrl) {
     if (!hasStartedTopicSession(data, quiz.moduleName, quiz.topicName)) {
       return send(res, 400, {
         error: 'Start a study session timer for this topic before taking an AI quiz.',
-      });
-    }
-
-    const alreadyAttempted = await hasQuizAttempt(user.id, quizId, data);
-    if (alreadyAttempted) {
-      return send(res, 409, {
-        error: 'This quiz has already been attempted. Retakes are disabled.',
       });
     }
 

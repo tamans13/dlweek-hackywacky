@@ -24,7 +24,6 @@ export default function TopicQuizSession() {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
   const [submittingQuiz, setSubmittingQuiz] = useState(false);
   const [quizResult, setQuizResult] = useState<QuizResultState | null>(null);
-  const [attemptLocked, setAttemptLocked] = useState(false);
 
   const moduleNames = state ? state.profile.modules : [];
   const moduleName = fromSlugMatch(moduleId || "", moduleNames || []);
@@ -36,11 +35,6 @@ export default function TopicQuizSession() {
     if (!moduleName || !topicName) return "/dashboard/modules";
     return `/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}`;
   }, [moduleName, topicName]);
-
-  const hasStartedTopicSession = useMemo(() => {
-    if (!state || !moduleName || !topicName) return false;
-    return state.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName);
-  }, [state, moduleName, topicName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,16 +49,15 @@ export default function TopicQuizSession() {
         const found = quizList.quizzes.find((item) => item.id === quizId) || null;
         if (!found) {
           setQuiz(null);
-          setAttemptLocked(false);
           setResourceError("Quiz not found for this topic.");
           return;
         }
         setQuiz(found);
-        setAttemptLocked(found.attemptCount > 0);
+        setSelectedAnswers({});
+        setQuizResult(null);
       } catch (err) {
         if (cancelled) return;
         setQuiz(null);
-        setAttemptLocked(false);
         setResourceError(err instanceof Error ? err.message : "Failed to load quiz.");
       } finally {
         if (!cancelled) setResourceLoading(false);
@@ -78,12 +71,12 @@ export default function TopicQuizSession() {
   }, [moduleName, topicName, quizId]);
 
   const handleAnswerChange = (questionId: string, optionIndex: number) => {
-    if (quizResult || attemptLocked) return;
+    if (quizResult) return;
     setSelectedAnswers((prev) => ({ ...prev, [questionId]: optionIndex }));
   };
 
   const handleSubmitQuiz = async () => {
-    if (!quiz || !hasStartedTopicSession || attemptLocked) return;
+    if (!quiz || quizResult) return;
 
     const answers = quiz.questions.map((question) => {
       const selected = selectedAnswers[question.id];
@@ -106,7 +99,6 @@ export default function TopicQuizSession() {
         percent: result.attempt.percent,
         review: result.review,
       });
-      setAttemptLocked(true);
       await refresh();
     } catch (err) {
       setResourceError(err instanceof Error ? err.message : "Failed to submit quiz.");
@@ -161,24 +153,25 @@ export default function TopicQuizSession() {
 
         {resourceError && <div className="text-sm text-destructive">{resourceError}</div>}
 
-        {!resourceLoading && !hasStartedTopicSession && (
-          <div className="bg-card border border-border rounded-lg p-5">
-            <p className="text-sm text-foreground mb-4">Start a study session on this topic before taking its AI quiz.</p>
-            <Button variant="outline" onClick={() => navigate(topicPath)}>
-              Return to Topic
-            </Button>
-          </div>
-        )}
-
-        {!resourceLoading && quiz && hasStartedTopicSession && (
+        {!resourceLoading && quiz && (
           <div className="bg-card border border-border rounded-lg p-5">
             <div className="mb-4">
               <h2 className="text-lg font-medium text-foreground">{quiz.title}</h2>
             </div>
 
-            {attemptLocked && !quizResult && (
-              <div className="mb-4 rounded-lg border border-border bg-muted/20 p-3 text-sm text-foreground">
-                This quiz has already been attempted and cannot be taken again.
+            {quiz.attempts.length > 0 && (
+              <div className="mb-4 rounded-lg border border-border bg-muted/20 p-3">
+                <div className="text-sm font-medium text-foreground mb-2">Past Attempts</div>
+                <div className="space-y-1">
+                  {quiz.attempts.map((attempt) => {
+                    const percent = attempt.total > 0 ? Math.round((attempt.score / attempt.total) * 100) : 0;
+                    return (
+                      <div key={attempt.id} className="text-xs text-muted-foreground">
+                        {new Date(attempt.submittedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}: {attempt.score}/{attempt.total} ({percent}%)
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -202,7 +195,7 @@ export default function TopicQuizSession() {
                             className={`flex items-center gap-3 p-2 border rounded-md ${
                               selected ? "border-primary bg-primary/5" : "border-border"
                             } ${isCorrect ? "border-success bg-success/10" : ""} ${isWrongSelected ? "border-destructive bg-destructive/10" : ""} ${
-                              attemptLocked ? "cursor-default" : "cursor-pointer"
+                              quizResult ? "cursor-default" : "cursor-pointer"
                             }`}
                           >
                             <input
@@ -210,7 +203,7 @@ export default function TopicQuizSession() {
                               name={question.id}
                               checked={selected}
                               onChange={() => handleAnswerChange(question.id, optionIndex)}
-                              disabled={attemptLocked || Boolean(quizResult)}
+                              disabled={Boolean(quizResult)}
                             />
                             <span className="text-sm text-foreground">{option}</span>
                           </label>
@@ -229,7 +222,7 @@ export default function TopicQuizSession() {
               })}
             </div>
 
-            {!attemptLocked && !quizResult && (
+            {!quizResult && (
               <div className="mt-5">
                 <Button onClick={handleSubmitQuiz} disabled={submittingQuiz}>
                   {submittingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
@@ -243,12 +236,6 @@ export default function TopicQuizSession() {
                 <div className="text-sm font-medium text-foreground mb-3">
                   Score: {quizResult.score}/{quizResult.total} ({quizResult.percent}%)
                 </div>
-                <Button onClick={() => navigate(topicPath)}>End Quiz</Button>
-              </div>
-            )}
-
-            {attemptLocked && !quizResult && (
-              <div className="mt-4">
                 <Button onClick={() => navigate(topicPath)}>End Quiz</Button>
               </div>
             )}

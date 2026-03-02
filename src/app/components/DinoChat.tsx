@@ -11,11 +11,15 @@ import {
   type ChatSessionMeta,
   type LearningChatMessage,
 } from "../lib/api";
+import { useAppData } from "../state/AppDataContext";
 
 const WELCOME: LearningChatMessage = {
   role: "assistant",
   content: "Hi, I am Dino Coach. Ask me about your modules, notes, weak topics, burnout, or what to study next.",
 };
+const BURNOUT_AUTO_OPEN_THRESHOLD = 50;
+const BURNOUT_NUDGE_STORAGE_KEY = "brainosaur_dino_burnout_nudge";
+const BURNOUT_NUDGE_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 
 function timeLabel(iso: string) {
   const t = new Date(iso).getTime();
@@ -23,7 +27,30 @@ function timeLabel(iso: string) {
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function buildBurnoutSupportMessage(moduleName: string, risk: number) {
+  return `Hey, I noticed your burnout risk for ${moduleName} is ${risk}%. You have been working hard, so let's ease the pressure a little. Try this now: take 5 slow breaths, do a 10-minute off-screen break, then come back for one light 20-minute review block. I can help you plan a low-stress study session if you want.`;
+}
+
+function shouldShowBurnoutNudge(moduleName: string, risk: number) {
+  try {
+    const raw = sessionStorage.getItem(BURNOUT_NUDGE_STORAGE_KEY);
+    if (!raw) return true;
+    const parsed = JSON.parse(raw) as { moduleName?: string; risk?: number; at?: number };
+    const lastAt = Number(parsed?.at || 0);
+    const ageMs = Date.now() - lastAt;
+    const sameModule = String(parsed?.moduleName || "") === moduleName;
+    const lastRisk = Number(parsed?.risk || 0);
+    if (sameModule && ageMs < BURNOUT_NUDGE_COOLDOWN_MS && risk <= lastRisk + 5) {
+      return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 export default function DinoChat() {
+  const { state } = useAppData();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -32,6 +59,18 @@ export default function DinoChat() {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [messages, setMessages] = useState<LearningChatMessage[]>([WELCOME]);
   const [proactiveUpdates, setProactiveUpdates] = useState<ChatProactiveUpdate[]>([]);
+  const [burnoutSupportMessage, setBurnoutSupportMessage] = useState("");
+  const shouldHideWelcomeIntro = Boolean(burnoutSupportMessage);
+
+  const highestBurnout = useMemo(() => {
+    if (!state) return null;
+    const entries = Object.entries(state.modules || {}).map(([moduleName, moduleState]) => ({
+      moduleName,
+      risk: Math.round(Number(moduleState?.burnoutRisk || 0)),
+    }));
+    if (!entries.length) return null;
+    return entries.sort((a, b) => b.risk - a.risk)[0];
+  }, [state]);
 
   const canSend = useMemo(() => Boolean(input.trim()) && !sending && Boolean(activeSessionId), [input, sending, activeSessionId]);
 
@@ -73,7 +112,7 @@ export default function DinoChat() {
         const chat = await fetchChatSession(sessionId);
         if (cancelled) return;
         const loaded = (chat.session.messages || []).map((m) => ({ role: m.role, content: m.content }));
-        setMessages(loaded.length ? loaded : [WELCOME]);
+        setMessages(loaded.length ? loaded : shouldHideWelcomeIntro ? [] : [WELCOME]);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load Dino chat.");
       }
@@ -81,7 +120,31 @@ export default function DinoChat() {
     return () => {
       cancelled = true;
     };
-  }, [open, activeSessionId]);
+  }, [open, activeSessionId, shouldHideWelcomeIntro]);
+
+  useEffect(() => {
+    if (!highestBurnout || highestBurnout.risk <= BURNOUT_AUTO_OPEN_THRESHOLD) {
+      setBurnoutSupportMessage("");
+      return;
+    }
+    if (!shouldShowBurnoutNudge(highestBurnout.moduleName, highestBurnout.risk)) return;
+
+    const message = buildBurnoutSupportMessage(highestBurnout.moduleName, highestBurnout.risk);
+    setBurnoutSupportMessage(message);
+    setOpen(true);
+    try {
+      sessionStorage.setItem(
+        BURNOUT_NUDGE_STORAGE_KEY,
+        JSON.stringify({
+          moduleName: highestBurnout.moduleName,
+          risk: highestBurnout.risk,
+          at: Date.now(),
+        }),
+      );
+    } catch {
+      // Ignore sessionStorage failures in private browsing contexts.
+    }
+  }, [highestBurnout]);
 
   const handleCreateChat = async () => {
     setError("");
@@ -89,7 +152,7 @@ export default function DinoChat() {
       const created = await createChatSession("New chat");
       setSessions((prev) => [created.session, ...prev]);
       setActiveSessionId(created.session.id);
-      setMessages([WELCOME]);
+      setMessages(shouldHideWelcomeIntro ? [] : [WELCOME]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create chat.");
     }
@@ -101,7 +164,7 @@ export default function DinoChat() {
     try {
       const session = await fetchChatSession(sessionId);
       const loaded = (session.session.messages || []).map((m) => ({ role: m.role, content: m.content }));
-      setMessages(loaded.length ? loaded : [WELCOME]);
+      setMessages(loaded.length ? loaded : shouldHideWelcomeIntro ? [] : [WELCOME]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to open chat.");
     }
@@ -196,10 +259,17 @@ export default function DinoChat() {
             </div>
 
             <div className="flex-1 p-3 overflow-auto space-y-2">
-              {messages.map((msg, index) => (
+              {burnoutSupportMessage && (
+                <div className="max-w-[88%] rounded-xl px-3 py-2 text-sm bg-primary/10 border border-primary/20 text-foreground">
+                  {burnoutSupportMessage}
+                </div>
+              )}
+              {messages
+                .filter((msg) => !(shouldHideWelcomeIntro && msg.role === "assistant" && msg.content === WELCOME.content))
+                .map((msg, index) => (
                 <div
                   key={`${msg.role}-${index}-${msg.content.slice(0, 8)}`}
-                  className={`max-w-[88%] rounded-xl px-3 py-2 text-sm ${
+                  className={`max-w-[88%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${
                     msg.role === "user"
                       ? "ml-auto bg-primary text-primary-foreground"
                       : "bg-muted text-foreground"
@@ -244,4 +314,3 @@ export default function DinoChat() {
     </div>
   );
 }
-

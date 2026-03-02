@@ -12,6 +12,7 @@ import Login from "./pages/Login";
 import OnboardingWelcome from "./pages/onboarding/Welcome";
 import OnboardingPreferences from "./pages/onboarding/Preferences";
 import OnboardingPermissions from "./pages/onboarding/Permissions";
+import OnboardingExtension from "./pages/onboarding/Extension";
 import OnboardingComplete from "./pages/onboarding/Complete";
 import { Navigate } from "react-router";
 import { hasAuthSession } from "./lib/api";
@@ -44,6 +45,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/onboarding/welcome" replace /> },
       { path: "welcome", Component: OnboardingWelcome },
       { path: "permissions", Component: OnboardingPermissions },
+      { path: "extension", Component: OnboardingExtension },
       { path: "preferences", Component: OnboardingPreferences },
       { path: "complete", Component: OnboardingComplete },
     ],

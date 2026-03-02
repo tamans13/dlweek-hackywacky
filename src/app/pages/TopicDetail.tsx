@@ -38,6 +38,20 @@ function formatDuration(seconds: number) {
   return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+function formatDifficultyLabel(difficulty?: string | null) {
+  const value = String(difficulty || "medium").trim().toLowerCase();
+  if (value === "easy" || value === "medium" || value === "hard") {
+    return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+  }
+  return "Medium";
+}
+
+function nextDifficultyFromCompletedCount(completedCount: number) {
+  if (completedCount <= 0) return "Easy";
+  if (completedCount === 1) return "Medium";
+  return "Hard";
+}
+
 export default function TopicDetail() {
   const { moduleId, topicId } = useParams<{ moduleId: string; topicId: string }>();
   const navigate = useNavigate();
@@ -134,6 +148,10 @@ export default function TopicDetail() {
     if (!state || !moduleName || !topicName) return false;
     return state.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName);
   }, [state, moduleName, topicName]);
+  const hasCompletedTopicSession = useMemo(() => {
+    if (!state || !moduleName || !topicName) return false;
+    return state.studySessions.some((session) => session.moduleName === moduleName && session.topicName === topicName && Boolean(session.endAt));
+  }, [state, moduleName, topicName]);
 
   useEffect(() => {
     if (!activeTopicSession) {
@@ -193,7 +211,7 @@ export default function TopicDetail() {
 
     try {
       await startSession(moduleName, topicName);
-      setSessionStatusMessage("Study session started. Quiz access for this topic is now unlocked.");
+      setSessionStatusMessage("Study session started.");
     } catch (err) {
       setResourceError(err instanceof Error ? err.message : "Failed to start study session.");
     }
@@ -206,7 +224,7 @@ export default function TopicDetail() {
 
     try {
       await stopSession(activeTopicSession.id);
-      setSessionStatusMessage("Study session ended.");
+      setSessionStatusMessage("Study session ended. AI quiz generation is now unlocked for this topic.");
     } catch (err) {
       setResourceError(err instanceof Error ? err.message : "Failed to end study session.");
     }
@@ -254,12 +272,13 @@ export default function TopicDetail() {
   const handleGenerateQuiz = async () => {
     if (!moduleName || !topicName) return;
 
-    if (!activeTopicSession) {
-      setResourceError("Start a study session timer for this topic before generating an AI quiz.");
+    if (!hasCompletedTopicSession) {
+      setResourceError("Complete a study session for this topic before generating an AI quiz.");
       return;
     }
-    if (quizzes.length > 0) {
-      setQuizStatusMessage("A quiz has already been generated for this topic.");
+    const pendingQuiz = quizzes.find((quiz) => quiz.attemptCount === 0);
+    if (pendingQuiz) {
+      setQuizStatusMessage("Complete your current quiz to unlock the next higher-difficulty quiz.");
       return;
     }
 
@@ -285,11 +304,6 @@ export default function TopicDetail() {
 
   const handleTakeQuiz = (quiz: GeneratedQuiz) => {
     if (!moduleName || !topicName) return;
-    if (!activeTopicSession) {
-      setResourceError("Start a study session timer for this topic before taking an AI quiz.");
-      return;
-    }
-    if (quiz.attemptCount > 0) return;
     navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/quizzes/${encodeURIComponent(quiz.id)}`);
   };
 
@@ -327,7 +341,10 @@ export default function TopicDetail() {
   const masteryPct = toPct(masteryNow);
   const retentionDecay = attempts.length ? Math.max(0, Math.round((topic.mastery - masteryNow) * 10)) : 0;
   const risk = retentionDecay > 30 ? "high" : retentionDecay > 12 ? "medium" : "low";
-  const quizAlreadyGenerated = quizzes.length > 0;
+  const pendingGeneratedQuiz = quizzes.find((quiz) => quiz.attemptCount === 0) || null;
+  const completedGeneratedQuizCount = quizzes.filter((quiz) => quiz.attemptCount > 0).length;
+  const nextQuizDifficulty = nextDifficultyFromCompletedCount(completedGeneratedQuizCount);
+  const quizGenerationLocked = Boolean(pendingGeneratedQuiz);
 
   return (
     <div className="min-h-screen">
@@ -385,8 +402,8 @@ export default function TopicDetail() {
             <div className="text-sm text-muted-foreground">
               {activeSession
                 ? `Another topic session is active: ${activeSession.moduleName} - ${activeSession.topicName}.`
-                : hasStartedTopicSession
-                  ? "You have started at least one session for this topic. AI quiz access is unlocked."
+                : hasCompletedTopicSession
+                  ? "You have completed at least one session for this topic. AI quiz access is unlocked."
                   : "Start the topic timer to unlock AI quiz generation and attempts for this topic."}
             </div>
           )}
@@ -446,7 +463,7 @@ export default function TopicDetail() {
               )}
             </div>
 
-            {activeTopicSession && (
+            {hasCompletedTopicSession && (
               <div className="bg-card border border-border rounded-lg p-5">
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="w-5 h-5 text-primary" />
@@ -454,23 +471,29 @@ export default function TopicDetail() {
                 </div>
 
                 <div className="flex items-end gap-3 mb-4">
-                  <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length || quizAlreadyGenerated}>
+                  <Button onClick={handleGenerateQuiz} disabled={generatingQuiz || !documents.length || quizGenerationLocked}>
                     {generatingQuiz ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                    {generatingQuiz ? "Generating..." : quizAlreadyGenerated ? "Quiz Generated" : "Generate Quiz"}
+                    {generatingQuiz ? "Generating..." : quizGenerationLocked ? "Complete Current Quiz" : "Generate Quiz"}
                   </Button>
-                  <span className="text-xs text-muted-foreground">AI decides question count (max 10).</span>
+                  <span className="text-xs text-muted-foreground">Next quiz difficulty: {nextQuizDifficulty} (AI decides question count, max 10).</span>
                 </div>
 
+                {quizGenerationLocked && (
+                  <p className="text-xs text-muted-foreground mb-3">Finish your current quiz attempt to unlock generation of the next higher-difficulty quiz.</p>
+                )}
                 {quizStatusMessage && <p className="text-sm text-primary mb-3">{quizStatusMessage}</p>}
 
                 <div className="space-y-2 max-h-56 overflow-auto pr-1">
                   {!quizzes.length && <div className="text-sm text-muted-foreground">No generated quizzes yet.</div>}
                   {quizzes.map((quiz) => {
                     const completed = quiz.attemptCount > 0;
-                    const takeDisabled = !activeTopicSession || completed;
+                    const difficulty = formatDifficultyLabel(quiz.difficultyPlan?.difficulty);
                     return (
                       <div key={quiz.id} className="w-full border rounded-lg p-3 border-border">
-                        <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
+                          <span className="text-[11px] px-2 py-1 rounded bg-muted text-muted-foreground whitespace-nowrap">Difficulty: {difficulty}</span>
+                        </div>
                         <div className="text-xs text-muted-foreground mt-1">
                           {quiz.questions.length} questions · created {new Date(quiz.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                         </div>
@@ -478,14 +501,25 @@ export default function TopicDetail() {
                           Attempts: {quiz.attemptCount}
                           {quiz.lastAttempt ? ` · latest ${quiz.lastAttempt.score}/${quiz.lastAttempt.total}` : ""}
                         </div>
+                        {quiz.attempts.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            {quiz.attempts.slice(0, 5).map((attempt) => {
+                              const percent = attempt.total > 0 ? Math.round((attempt.score / attempt.total) * 100) : 0;
+                              return (
+                                <div key={attempt.id} className="text-[11px] text-muted-foreground">
+                                  {new Date(attempt.submittedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}: {attempt.score}/{attempt.total} ({percent}%)
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                         <div className="mt-3">
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={takeDisabled}
                             onClick={() => handleTakeQuiz(quiz)}
                           >
-                            {completed ? "Completed" : activeTopicSession ? "Take Quiz" : "Start Session to Unlock"}
+                            {completed ? "Reattempt Quiz" : "Take Quiz"}
                           </Button>
                         </div>
                       </div>

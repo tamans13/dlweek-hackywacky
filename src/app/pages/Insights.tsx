@@ -57,10 +57,10 @@ export default function Insights() {
 
   const burnoutTrendData = useMemo(() => {
     if (!state) return [];
-    return Object.entries(state.modules).map(([name, module]) => ({
-      week: name.length > 12 ? `${name.slice(0, 12)}…` : name,
-      score: Math.round(module.burnoutRisk || 0),
-    }));
+    const risks = Object.values(state.modules).map((module) => Number(module.burnoutRisk || 0));
+    if (!risks.length) return [];
+    const averageRisk = Math.round(risks.reduce((sum, value) => sum + value, 0) / risks.length);
+    return [{ period: "All Modules", score: averageRisk }];
   }, [state]);
 
   const focusScore = useMemo(() => {
@@ -189,14 +189,14 @@ export default function Insights() {
         <div className="bg-card border border-border rounded-lg p-5">
           <div className="flex items-center gap-2 mb-4">
             <AlertTriangle className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-foreground text-lg">Burnout Trend by Module</h3>
+            <h3 className="font-medium text-foreground text-lg">Burnout Trend</h3>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={burnoutTrendData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="week" tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} />
+                  <XAxis dataKey="period" tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} />
                   <YAxis tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} domain={[0, 100]} />
                   <Tooltip contentStyle={{ backgroundColor: "var(--color-card)", border: "1px solid var(--color-border)", borderRadius: "0.5rem" }} />
                   <Line type="monotone" dataKey="score" stroke="var(--color-warning)" strokeWidth={2} dot={{ fill: "var(--color-warning)", r: 4 }} />

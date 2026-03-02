@@ -96,6 +96,8 @@ export default function OnboardingComplete() {
 
       await signupUser(email, password);
 
+      const onboardingPersona = readSessionJson<OnboardingPersonaAnalysis>("onboarding_persona", analysis);
+
       await saveProfileData({
         fullName: String(welcome.fullName || welcome.name || ""),
         email,
@@ -103,6 +105,7 @@ export default function OnboardingComplete() {
         yearOfStudy: String(welcome.year || ""),
         courseOfStudy: String(welcome.course || ""),
         modules: [],
+        onboardingPersona,
       });
       navigate("/dashboard");
     } catch (err) {

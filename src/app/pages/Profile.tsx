@@ -1,13 +1,32 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { User, Edit2, Save } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
-import { derivePersonaFromSummary, getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
+import { getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
+
+const defaultPersona = {
+  learningStyle: "Adaptive Mixed Learner",
+  rationale: "Complete more study sessions and quizzes to generate a higher-confidence persona.",
+  studyTechniques: [
+    {
+      title: "Time-Boxing Method",
+      description: "Use 30-60 minute focused blocks with short recovery breaks.",
+    },
+    {
+      title: "Active Recall First",
+      description: "Attempt questions before reviewing notes to expose real weaknesses.",
+    },
+    {
+      title: "Spaced Review Priority",
+      description: "Clear due spaced-repetition topics before new content.",
+    },
+  ],
+};
 
 export default function Profile() {
-  const { state, loading, error, saveProfileData, runInsights, authUser } = useAppData();
+  const { state, loading, error, saveProfileData, authUser } = useAppData();
   const [isEditing, setIsEditing] = useState(false);
   const [highlightPersonaCard, setHighlightPersonaCard] = useState(false);
   const [profileData, setProfileData] = useState({
@@ -18,8 +37,9 @@ export default function Profile() {
     year: "",
     modules: "",
   });
-  const [persona, setPersona] = useState("Adaptive Learner");
-  const [personaSummary, setPersonaSummary] = useState("Complete more quizzes to generate a high-confidence persona.");
+  const [persona, setPersona] = useState(defaultPersona.learningStyle);
+  const [personaSummary, setPersonaSummary] = useState(defaultPersona.rationale);
+  const [personaTechniques, setPersonaTechniques] = useState(defaultPersona.studyTechniques);
 
   useEffect(() => {
     if (!state) return;
@@ -34,8 +54,6 @@ export default function Profile() {
     }));
   }, [state]);
 
-  const moduleName = useMemo(() => state?.profile.modules?.[0] || "", [state]);
-
   useEffect(() => {
     if (window.sessionStorage.getItem(PROFILE_FLASH_KEY) !== "1") return;
     window.sessionStorage.removeItem(PROFILE_FLASH_KEY);
@@ -45,28 +63,29 @@ export default function Profile() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadPersona() {
-      if (!moduleName) return;
-      try {
-        const data = await runInsights(moduleName);
-        if (!cancelled) {
-          const derivedPersona = derivePersonaFromSummary(data.summary);
-          setPersona(derivedPersona);
-          setPersonaSummary(data.summary);
-          const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
-          window.localStorage.setItem(currentKey, derivedPersona);
-          window.localStorage.setItem(seenKey, derivedPersona);
-        }
-      } catch {
-        // Keep fallback persona text.
-      }
+    if (!state) return;
+    const personaData = state.personaProfile || state.onboardingPersona || defaultPersona;
+    const learningStyle = String(personaData.learningStyle || defaultPersona.learningStyle).trim();
+    const rationale = String(personaData.rationale || defaultPersona.rationale).trim();
+    const techniques = Array.isArray(personaData.studyTechniques)
+      ? personaData.studyTechniques
+          .map((item) => ({
+            title: String(item?.title || "").trim(),
+            description: String(item?.description || "").trim(),
+          }))
+          .filter((item) => item.title && item.description)
+      : [];
+
+    setPersona(learningStyle || defaultPersona.learningStyle);
+    setPersonaSummary(rationale || defaultPersona.rationale);
+    setPersonaTechniques(techniques.length ? techniques : defaultPersona.studyTechniques);
+
+    const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+    window.localStorage.setItem(currentKey, learningStyle || defaultPersona.learningStyle);
+    if (!window.localStorage.getItem(seenKey)) {
+      window.localStorage.setItem(seenKey, learningStyle || defaultPersona.learningStyle);
     }
-    void loadPersona();
-    return () => {
-      cancelled = true;
-    };
-  }, [moduleName, runInsights, authUser?.email]);
+  }, [state, authUser?.email]);
 
   const handleSave = async () => {
     if (!state) return;
@@ -185,18 +204,12 @@ export default function Profile() {
           </div>
 
           <div className="space-y-3">
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Time-Boxing Method</h5>
-              <p className="text-sm text-muted-foreground">Use 30-60 minute focused blocks with short recovery breaks.</p>
-            </div>
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Active Recall First</h5>
-              <p className="text-sm text-muted-foreground">Attempt questions before reviewing notes to expose real weaknesses.</p>
-            </div>
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Spaced Review Priority</h5>
-              <p className="text-sm text-muted-foreground">Clear due spaced-repetition topics before new content.</p>
-            </div>
+            {personaTechniques.map((technique) => (
+              <div key={technique.title} className="border border-border rounded-lg p-4">
+                <h5 className="font-medium text-foreground mb-1">{technique.title}</h5>
+                <p className="text-sm text-muted-foreground">{technique.description}</p>
+              </div>
+            ))}
           </div>
         </div>
       </div>

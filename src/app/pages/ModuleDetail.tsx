@@ -4,7 +4,6 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Checkbox } from "../components/ui/checkbox";
 import { ArrowLeft, CheckCircle2, Calendar, Plus, Upload, ChevronDown, X } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
@@ -34,16 +33,17 @@ export default function ModuleDetail() {
       attemptsByTopic.set(attempt.topicName, (attemptsByTopic.get(attempt.topicName) || 0) + 1);
     }
 
-    return Object.values(moduleState.topics)
-      .map((topic) => {
-        const hasAttempts = (attemptsByTopic.get(topic.topicName) || 0) > 0;
+    return Object.entries(moduleState.topics)
+      .map(([topicKey, topic]) => {
+        const topicName = topic?.topicName?.trim() || topicKey;
+        const hasAttempts = (attemptsByTopic.get(topicName) || 0) > 0;
         const estimated = hasAttempts ? (topic.estimatedMasteryNow ?? topic.mastery) : 0;
         const masteryPct = Math.round((estimated / 10) * 100);
         const retentionPct = hasAttempts ? Math.round((estimated / Math.max(1, topic.mastery)) * 100) : 0;
         const status = masteryPct >= 85 ? "mastered" : masteryPct >= 65 ? "good" : "review";
         return {
-          id: toSlug(topic.topicName),
-          name: topic.topicName,
+          id: toSlug(topicName || topicKey),
+          name: topicName,
           masteryPct,
           retentionPct,
           status,
@@ -60,7 +60,7 @@ export default function ModuleDetail() {
   const [examName, setExamName] = useState(examPlan?.examName || "");
   const [examDate, setExamDate] = useState(examPlan?.examDate || "");
   const [topicsTested, setTopicsTested] = useState<string[]>(examPlan?.topicsTested || []);
-  const [topicsPopoverOpen, setTopicsPopoverOpen] = useState(false);
+  const [topicsDropdownOpen, setTopicsDropdownOpen] = useState(false);
   const [examError, setExamError] = useState<string | null>(null);
   const [uploadTopicName, setUploadTopicName] = useState("");
   const [uploadStatus, setUploadStatus] = useState<{ type: "error" | "success"; message: string } | null>(null);
@@ -78,6 +78,12 @@ export default function ModuleDetail() {
     setTopicsTested((prev) => prev.filter((name) => validTopicNames.has(name)));
   }, [topics]);
 
+  useEffect(() => {
+    if (!showAddExamDialog) {
+      setTopicsDropdownOpen(false);
+    }
+  }, [showAddExamDialog]);
+
   const handleAddTopic = async () => {
     if (!moduleName || !newTopicName.trim()) return;
     await addTopic({ moduleName, topicName: newTopicName.trim() });
@@ -89,21 +95,32 @@ export default function ModuleDetail() {
   const handleSaveExam = async () => {
     if (!moduleName) return;
     const trimmedExamName = examName.trim();
-    if (!trimmedExamName || !examDate || !topicsTested.length) {
-      setExamError("Please provide exam name, date, and at least one topic.");
+    if (!trimmedExamName || !examDate) {
+      setExamError("Please provide exam name and exam date.");
       return;
     }
-    await saveExamPlan({
-      moduleName,
-      examName: trimmedExamName,
-      examDate,
-      topicsTested,
-    });
-    setExamError(null);
-    setShowAddExamDialog(false);
+
+    if (!topicsTested.length) {
+      setExamError("Please select at least one tested topic.");
+      return;
+    }
+
+    try {
+      await saveExamPlan({
+        moduleName,
+        examName: trimmedExamName,
+        examDate,
+        topicsTested,
+      });
+      setExamError(null);
+      setShowAddExamDialog(false);
+    } catch (err) {
+      setExamError(err instanceof Error ? err.message : "Failed to save exam. Please try again.");
+    }
   };
 
   const toggleExamTopic = (topicName: string, checked: boolean) => {
+    setExamError(null);
     setTopicsTested((prev) => {
       if (checked) return Array.from(new Set([...prev, topicName]));
       return prev.filter((name) => name !== topicName);
@@ -248,56 +265,58 @@ export default function ModuleDetail() {
                   </div>
                   <div className="space-y-2">
                     <Label>Topics Covered</Label>
-                    <Popover open={topicsPopoverOpen} onOpenChange={setTopicsPopoverOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className="w-full justify-between font-normal min-h-10 h-auto"
-                          disabled={topicsLoading || noTopicsFound}
-                        >
-                          <span className="flex flex-wrap items-center gap-2 text-left">
-                            {!topicsTested.length && (
-                              <span className="text-muted-foreground">
-                                {topicsLoading ? "Loading topics..." : noTopicsFound ? "No topics found" : "Select topics"}
-                              </span>
-                            )}
-                            {topicsTested.map((topicName) => (
+                    <div className="relative">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between font-normal min-h-10 h-auto"
+                        disabled={topicsLoading || noTopicsFound}
+                        onClick={() => setTopicsDropdownOpen((prev) => !prev)}
+                      >
+                        <span className="flex flex-wrap items-center gap-2 text-left">
+                          {!topicsTested.length && (
+                            <span className="text-muted-foreground">
+                              {topicsLoading
+                                ? "Loading topics..."
+                                : noTopicsFound
+                                  ? "No topics found"
+                                  : "Select topics"}
+                            </span>
+                          )}
+                          {topicsTested.map((topicName) => (
+                            <span
+                              key={topicName}
+                              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/60 px-2 py-1 text-xs text-foreground"
+                            >
+                              <span>{topicName}</span>
                               <span
-                                key={topicName}
-                                className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/60 px-2 py-1 text-xs text-foreground"
-                              >
-                                <span>{topicName}</span>
-                                <span
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-label={`Remove ${topicName}`}
-                                  className="rounded-sm text-muted-foreground hover:text-foreground"
-                                  onClick={(e) => {
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Remove ${topicName}`}
+                                className="rounded-sm text-muted-foreground hover:text-foreground"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleExamTopic(topicName, false);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
                                     e.stopPropagation();
                                     toggleExamTopic(topicName, false);
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                      toggleExamTopic(topicName, false);
-                                    }
-                                  }}
-                                >
-                                  <X className="w-3 h-3" />
-                                </span>
+                                  }
+                                }}
+                              >
+                                <X className="w-3 h-3" />
                               </span>
-                            ))}
-                          </span>
-                          <ChevronDown className="w-4 h-4 ml-2 text-muted-foreground flex-shrink-0" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent align="start" className="w-[320px] p-3">
-                        <div className="space-y-2 max-h-52 overflow-auto">
-                          {topicsLoading && <p className="text-sm text-muted-foreground">Loading topics...</p>}
-                          {noTopicsFound && <p className="text-sm text-muted-foreground">No topics found.</p>}
-                          {!topicsLoading &&
-                            topics.map((topic) => {
+                            </span>
+                          ))}
+                        </span>
+                        <ChevronDown className="w-4 h-4 ml-2 text-muted-foreground flex-shrink-0" />
+                      </Button>
+                      {topicsDropdownOpen && !topicsLoading && !noTopicsFound && (
+                        <div className="absolute z-50 mt-2 w-full rounded-md border border-border bg-popover p-3 shadow-md">
+                          <div className="space-y-2 max-h-52 overflow-auto">
+                            {topics.map((topic) => {
                               const selected = topicsTested.includes(topic.name);
                               return (
                                 <button
@@ -313,14 +332,19 @@ export default function ModuleDetail() {
                                 </button>
                               );
                             })}
+                          </div>
                         </div>
-                      </PopoverContent>
-                    </Popover>
+                      )}
+                    </div>
                   </div>
                   {examError && (
                     <p className="text-sm text-destructive">{examError}</p>
                   )}
-                  <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleSaveExam}>
+                  <Button
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+                    onClick={handleSaveExam}
+                    disabled={!examName.trim() || !examDate || !topicsTested.length || topics.length === 0}
+                  >
                     Save Exam
                   </Button>
                 </div>

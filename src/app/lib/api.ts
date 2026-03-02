@@ -97,6 +97,16 @@ export interface ExamPlan {
   updatedAt: string;
 }
 
+export interface PersonaProfile extends OnboardingPersonaAnalysis {
+  updatedAt: string;
+  source: string;
+  evidenceSnapshot?: {
+    studySessions: number;
+    quizAttempts: number;
+    tabEvents: number;
+  };
+}
+
 export interface BackendState {
   profile: ProfileData;
   modules: Record<string, ModuleState>;
@@ -104,6 +114,8 @@ export interface BackendState {
   tabEvents: TabEvent[];
   quizAttempts: QuizAttempt[];
   examPlans: Record<string, ExamPlan>;
+  onboardingPersona?: OnboardingPersonaAnalysis | null;
+  personaProfile?: PersonaProfile | null;
   createdAt: string;
   updatedAt: string;
   aiEnabled: boolean;
@@ -421,6 +433,7 @@ export function saveProfile(payload: {
   yearOfStudy: string;
   courseOfStudy: string;
   modules: string[];
+  onboardingPersona?: OnboardingPersonaAnalysis;
 }) {
   return request<{ ok: true; profile: ProfileData }>("/api/profile", {
     method: "POST",

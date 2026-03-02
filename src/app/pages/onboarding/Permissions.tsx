@@ -14,7 +14,7 @@ export default function OnboardingPermissions() {
   });
 
   const handleContinue = () => {
-    navigate("/onboarding/preferences");
+    navigate("/onboarding/extension");
   };
 
   return (

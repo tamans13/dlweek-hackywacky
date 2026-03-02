@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   AuthUser,
   BackendState,
+  OnboardingPersonaAnalysis,
   clearAuthSession,
   deleteTopic,
   fetchDueQuizzes,
@@ -41,6 +42,7 @@ interface AppDataContextValue {
     yearOfStudy: string;
     courseOfStudy: string;
     modules: string[];
+    onboardingPersona?: OnboardingPersonaAnalysis;
   }) => Promise<void>;
   startSession: (moduleName: string, topicName: string) => Promise<string>;
   stopSession: (sessionId: string) => Promise<void>;
@@ -182,7 +184,15 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const saveProfileData = useCallback(
-    async (payload: { fullName?: string; email?: string; university: string; yearOfStudy: string; courseOfStudy: string; modules: string[] }) => {
+    async (payload: {
+      fullName?: string;
+      email?: string;
+      university: string;
+      yearOfStudy: string;
+      courseOfStudy: string;
+      modules: string[];
+      onboardingPersona?: OnboardingPersonaAnalysis;
+    }) => {
       await saveProfile(payload);
       await refresh();
     },

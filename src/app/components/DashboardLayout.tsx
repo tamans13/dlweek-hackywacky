@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
-import { 
+import {
   LayoutDashboard, 
   BookOpen, 
   TrendingUp, 
@@ -11,46 +11,41 @@ import {
 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import DinoChat from "./DinoChat";
-import { derivePersonaFromSummary, getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
+import { getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
 
 export default function DashboardLayout() {
   const location = useLocation();
-  const { authUser, logout, state, runInsights } = useAppData();
+  const { authUser, logout, state } = useAppData();
   const [showProfileDot, setShowProfileDot] = useState(false);
-  const moduleName = useMemo(() => state?.profile.modules?.[0] || "", [state]);
+  const activePersona = useMemo(
+    () => state?.personaProfile?.learningStyle || state?.onboardingPersona?.learningStyle || "",
+    [state],
+  );
 
   useEffect(() => {
-    let cancelled = false;
+    if (!activePersona) {
+      setShowProfileDot(false);
+      return;
+    }
+    const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+    const previousPersona = window.localStorage.getItem(currentKey);
+    const seenPersona = window.localStorage.getItem(seenKey);
 
-    async function evaluatePersonaChange() {
-      if (!moduleName) return;
-      try {
-        const data = await runInsights(moduleName);
-        if (cancelled) return;
-        const persona = derivePersonaFromSummary(data.summary);
-        const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
-        const previousPersona = window.localStorage.getItem(currentKey);
-        const seenPersona = window.localStorage.getItem(seenKey);
-
-        if (!previousPersona && !seenPersona) {
-          window.localStorage.setItem(currentKey, persona);
-          window.localStorage.setItem(seenKey, persona);
-          setShowProfileDot(false);
-          return;
-        }
-
-        window.localStorage.setItem(currentKey, persona);
-        setShowProfileDot(seenPersona !== persona);
-      } catch {
-        // Keep UI stable if insights are temporarily unavailable.
-      }
+    if (!previousPersona && !seenPersona) {
+      window.localStorage.setItem(currentKey, activePersona);
+      window.localStorage.setItem(seenKey, activePersona);
+      setShowProfileDot(false);
+      return;
     }
 
-    void evaluatePersonaChange();
-    return () => {
-      cancelled = true;
-    };
-  }, [moduleName, runInsights, authUser?.email]);
+    window.localStorage.setItem(currentKey, activePersona);
+    if (!seenPersona) {
+      window.localStorage.setItem(seenKey, activePersona);
+      setShowProfileDot(false);
+      return;
+    }
+    setShowProfileDot(seenPersona !== activePersona);
+  }, [activePersona, authUser?.email]);
 
   const isActive = (path: string) => {
     // For dashboard, only match exact path
@@ -99,6 +94,9 @@ export default function DashboardLayout() {
                 onClick={() => {
                   if (isProfileItem && showProfileDot) {
                     window.sessionStorage.setItem(PROFILE_FLASH_KEY, "1");
+                    const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+                    const currentPersona = window.localStorage.getItem(currentKey);
+                    if (currentPersona) window.localStorage.setItem(seenKey, currentPersona);
                     setShowProfileDot(false);
                   }
                 }}
