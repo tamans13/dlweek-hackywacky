@@ -34,6 +34,12 @@ Start frontend:
 npm run dev:ui
 ```
 
+Or run both together (cross-platform: Windows/macOS/Linux):
+
+```bash
+npm run dev:full
+```
+
 Open:
 - `http://localhost:5173`
 

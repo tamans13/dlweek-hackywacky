@@ -9,6 +9,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
+import DinoChat from "./DinoChat";
 
 export default function DashboardLayout() {
   const location = useLocation();
@@ -91,6 +92,7 @@ export default function DashboardLayout() {
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
+      <DinoChat />
     </div>
   );
 }

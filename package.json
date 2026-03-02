@@ -10,7 +10,7 @@
     "dev": "node server.js",
     "dev:api": "node server.js",
     "dev:ui": "vite",
-    "dev:full": "sh -c 'node server.js & vite'",
+    "dev:full": "node scripts/dev-full.mjs",
     "build:ui": "vite build",
     "preview:ui": "vite preview"
   },

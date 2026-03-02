@@ -1017,9 +1017,59 @@ function readinessScore(moduleName, data) {
   const proximityBoost = urgency * (masteryPct - 50) * 0.22;
   const score = clamp(baseReadiness + proximityBoost - stabilityPenalty, 0, 100);
 
+  const untestedTopicCount = Math.max(0, testedNames.length - clamp(Number(exam.topicsCovered || 0), 0, testedNames.length));
+  const weakest = topicStates
+    .map((topic) => ({
+      topicName: topic.topicName,
+      masteryPct: Math.round(masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery)),
+    }))
+    .sort((a, b) => a.masteryPct - b.masteryPct);
+  const priorityTopics = weakest.slice(0, 3);
+  const priorityMean = priorityTopics.length
+    ? priorityTopics.reduce((sum, item) => sum + item.masteryPct, 0) / priorityTopics.length
+    : masteryPct;
+  const projectedReadiness = clamp(
+    score + (focusTerm - 50) * 0.1 - untestedTopicCount * 1.8 + (priorityMean - masteryPct) * 0.15,
+    0,
+    100,
+  );
+  const dailyTopicTarget = Math.max(
+    1,
+    Math.ceil((untestedTopicCount + priorityTopics.length * 0.8 + Math.max(0, (70 - masteryPct) / 20)) / Math.max(1, daysLeft)),
+  );
+  const confidence = clamp(
+    Math.round(
+      35
+        + clamp(testedAttempts.length, 0, 12) * 3
+        + coverageRatio * 18
+        + (1 - clamp(stabilityPenalty / 18, 0, 1)) * 22
+        - (daysLeft <= 3 ? 12 : 0),
+    ),
+    20,
+    95,
+  );
+  const riskBand = projectedReadiness >= 75 ? 'low' : projectedReadiness >= 55 ? 'medium' : 'high';
+  const modelType = daysLeft <= 14 ? 'countdown-critical' : 'spaced-readiness';
+
   return {
     score: Math.round(score),
     reason: `Mastery ${Math.round(masteryPct)}%, quiz ${Math.round(meanQuizScore)}%, focus ${Math.round(focusTerm)}%, coverage ${Math.round(coverageRatio * 100)}%, ${Math.ceil(daysLeft)} days to exam.`,
+    prediction: {
+      modelType,
+      riskBand,
+      projectedReadiness: Math.round(projectedReadiness),
+      confidence,
+      daysToExam: Math.ceil(daysLeft),
+      untestedTopicCount,
+      dailyTopicTarget,
+      priorityTopics,
+      explanation:
+        riskBand === 'low'
+          ? 'Trajectory looks stable. Keep spaced reviews and one mixed quiz block daily.'
+          : riskBand === 'medium'
+            ? 'Some risk detected. Prioritize weakest topics and increase retrieval practice frequency.'
+            : 'High risk trend. Run intensive review cycles on weak topics and reduce low-value study load.',
+    },
   };
 }
 
@@ -1387,6 +1437,113 @@ async function buildInsightsWithOpenAI(data, moduleName) {
     summary: String(parsed.summary),
     actions: parsed.actions.slice(0, 5).map((x) => String(x)),
   };
+}
+
+function buildChatHeuristic(data, userMessage) {
+  const message = String(userMessage || '').toLowerCase();
+  const moduleNames = Object.keys(data.modules || {});
+  const allTopics = moduleNames.flatMap((moduleName) =>
+    Object.values(moduleState(data, moduleName).topics || {}).map((topic) => ({
+      moduleName,
+      topicName: topic.topicName,
+      mastery: topic.estimatedMasteryNow ?? topic.mastery,
+      nextReviewAt: topic.nextReviewAt,
+    })),
+  );
+  const weakest = allTopics
+    .slice()
+    .sort((a, b) => (a.mastery || 0) - (b.mastery || 0))
+    .slice(0, 3);
+  const dueToday = allTopics.filter((t) => new Date(t.nextReviewAt) <= new Date()).slice(0, 4);
+
+  if (message.includes('burnout') || message.includes('tired') || message.includes('stress')) {
+    const moduleRisks = moduleNames
+      .map((name) => ({ name, risk: Math.round(moduleState(data, name).burnoutRisk || 0) }))
+      .sort((a, b) => b.risk - a.risk)
+      .slice(0, 2);
+    if (!moduleRisks.length) return 'I need more study data to estimate burnout. Start a few sessions and quizzes first.';
+    return `Top burnout risk right now: ${moduleRisks.map((x) => `${x.name} ${x.risk}%`).join(', ')}. Do one light note review block (20 min), then take a 10-15 min off-screen break before any quiz.`;
+  }
+
+  if (message.includes('what should i study') || message.includes('what to study') || message.includes('next')) {
+    if (dueToday.length) {
+      return `Start with due reviews: ${dueToday.map((t) => `${t.moduleName} - ${t.topicName}`).join(', ')}. After that, do one targeted quiz on your weakest topic.`;
+    }
+    if (weakest.length) {
+      return `No overdue reviews. I suggest: ${weakest.map((t) => `${t.moduleName} - ${t.topicName}`).join(', ')}. Use 30 minutes active recall + 10 minutes corrections.`;
+    }
+    return 'Create your first module/topic and upload notes. Then I can generate a focused study plan.';
+  }
+
+  if (message.includes('quiz') || message.includes('practice')) {
+    if (!weakest.length) return 'I need quiz/topic data first. Upload notes and generate a quiz for at least one topic.';
+    return `Do a quiz on ${weakest[0].moduleName} - ${weakest[0].topicName}, then review only wrong answers and summarize 3 takeaways.`;
+  }
+
+  return `I can help with: 1) what to study next, 2) burnout recovery, 3) quiz strategy, 4) review prioritization. Your weakest topics now: ${weakest.map((t) => `${t.moduleName} - ${t.topicName}`).join(', ') || 'not enough data yet'}.`;
+}
+
+async function buildChatWithOpenAI(data, userMessage, history = []) {
+  if (!OPENAI_API_KEY) return buildChatHeuristic(data, userMessage);
+  try {
+    const modulePayload = Object.keys(data.modules).map((name) => {
+      const mod = moduleState(data, name);
+      return {
+        moduleName: name,
+        burnoutRisk: Math.round(mod.burnoutRisk || 0),
+        focusEfficiency: Math.round(mod.focusEfficiency || 0),
+        topics: Object.values(mod.topics).map((t) => ({
+          topicName: t.topicName,
+          mastery: Math.round(masteryToPercent(t.estimatedMasteryNow ?? t.mastery)),
+          nextReviewAt: t.nextReviewAt,
+        })),
+      };
+    });
+
+    const trimmedHistory = Array.isArray(history)
+      ? history
+          .slice(-10)
+          .filter((x) => x && (x.role === 'user' || x.role === 'assistant'))
+          .map((x) => ({ role: x.role, content: String(x.content || '').slice(0, 800) }))
+      : [];
+
+    const payload = {
+      modules: modulePayload,
+      recentQuizAttempts: data.quizAttempts.slice(-20),
+      recentTabEvents: data.tabEvents.slice(-40),
+      userMessage: String(userMessage || ''),
+      history: trimmedHistory,
+    };
+
+    const prompt = [
+      'You are Dino Coach, a concise study copilot with occasional dinosaur puns and humour where appropriate.',
+      'Keep responses practical, supportive, and specific to the provided learning data.',
+      'Limit to about 4-6 short sentences, with clear next actions.',
+      'If data is sparse, say exactly what data is missing and what to do next.',
+      JSON.stringify(payload),
+    ].join('\n');
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: prompt,
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) return buildChatHeuristic(data, userMessage);
+    const result = await response.json();
+    const text = String(readResponseText(result) || '').trim();
+    if (!text) return buildChatHeuristic(data, userMessage);
+    return text;
+  } catch {
+    return buildChatHeuristic(data, userMessage);
+  }
 }
 
 function isTextLikeFile(fileName, mimeType) {
@@ -1762,6 +1919,25 @@ function normalizeQuestions(rawQuestions, questionCount) {
   return out;
 }
 
+function isMetaNotesQuestion(text) {
+  const q = String(text || '').toLowerCase();
+  return (
+    q.includes('in your uploaded notes')
+    || q.includes('in the notes')
+    || q.includes('in the document')
+    || q.includes('which word appears')
+    || q.includes('was this word')
+    || q.includes('appears in your')
+    || q.includes('mentioned in the notes')
+  );
+}
+
+function hasGroundingEvidence(rawQuestion, contextLower) {
+  const evidence = String(rawQuestion?.evidenceQuote || rawQuestion?.evidence || '').trim();
+  if (!evidence || evidence.length < 12) return false;
+  return contextLower.includes(evidence.toLowerCase());
+}
+
 function buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan = null) {
   const fullText = documents
     .map((doc) => String(doc.extractedText || ''))
@@ -1807,12 +1983,12 @@ function buildHeuristicQuiz(moduleName, topicName, documents, questionCount, dif
 
     const answerKeyword = keywords[i % Math.max(1, keywords.length)] || `concept_${i + 1}`;
     const distractorKeywords = sampleFromArray(keywords.filter((x) => x !== answerKeyword), 3);
-    while (distractorKeywords.length < 3) distractorKeywords.push(`distractor_${distractorKeywords.length + 1}`);
+    while (distractorKeywords.length < 3) distractorKeywords.push(`concept_${distractorKeywords.length + 1}`);
 
     const options = shuffle([answerKeyword, ...distractorKeywords]);
     questions.push({
       id: `q${i + 1}`,
-      question: `Which keyword appears in your uploaded notes for ${moduleName} / ${topicName}?`,
+      question: `Which term is most central to ${topicName} based on the uploaded material?`,
       options,
       answerIndex: options.indexOf(answerKeyword),
       explanation: 'Generated from uploaded document vocabulary due limited extractable sentence context.',
@@ -1852,13 +2028,16 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount, diff
     'You are a strict quiz generator for students.',
     'Return JSON only. No markdown.',
     'Expected JSON shape:',
-    '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string }] }',
+    '{ "title": string, "questions": [{ "question": string, "options": [string,string,string,string], "answerIndex": number, "explanation": string, "evidenceQuote": string }] }',
     `Create exactly ${questionCount} multiple-choice questions with 4 options each.`,
     `Module: ${moduleName}`,
     `Topic: ${topicName}`,
     difficultyLine,
     'Rules:',
     '- Use only the provided documents.',
+    '- Every question must test understanding of content from the documents, not whether words appear in notes.',
+    '- Never ask meta questions about notes/documents (e.g., "was this word in the notes").',
+    '- Include evidenceQuote as an exact short quote (12-180 chars) copied from documents that supports the answer.',
     '- Keep options plausible and avoid trick ambiguity.',
     '- answerIndex must be 0..3 and match the correct option.',
     'Documents:',
@@ -1893,8 +2072,10 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount, diff
       return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
     }
 
-    const questions = normalizeQuestions(parsed.questions, questionCount);
-    if (!questions.length) {
+    const contextLower = context.toLowerCase();
+    const groundedRaw = parsed.questions.filter((q) => !isMetaNotesQuestion(q?.question) && hasGroundingEvidence(q, contextLower));
+    const questions = normalizeQuestions(groundedRaw, questionCount);
+    if (questions.length < questionCount) {
       return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
     }
 
@@ -3033,6 +3214,16 @@ async function apiHandler(req, res, parsedUrl) {
     else for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
     const insights = await buildInsightsWithOpenAI(data, body.moduleName || '');
     return send(res, 200, { ok: true, insights, aiEnabled: Boolean(OPENAI_API_KEY) });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/chat') {
+    const body = await parseBody(req);
+    const message = String(body.message || '').trim();
+    if (!message) return send(res, 400, { error: 'message is required' });
+
+    for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
+    const reply = await buildChatWithOpenAI(data, message, Array.isArray(body.history) ? body.history : []);
+    return send(res, 200, { ok: true, reply, aiEnabled: Boolean(OPENAI_API_KEY) });
   }
 
   return send(res, 404, { error: 'Not found' });

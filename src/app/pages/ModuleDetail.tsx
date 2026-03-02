@@ -222,6 +222,11 @@ export default function ModuleDetail() {
 
   const readinessReason =
     readinessInfo?.reason ?? (moduleReadiness ? "Estimated locally" : "No data yet");
+  const predictor = readinessInfo?.prediction;
+  const predictorToneClass =
+    predictor?.riskBand === "low" ? "text-success" : predictor?.riskBand === "medium" ? "text-warning" : "text-destructive";
+  const predictorBandLabel =
+    predictor?.riskBand === "low" ? "Low Risk" : predictor?.riskBand === "medium" ? "Medium Risk" : "High Risk";
 
   return (
     <div className="min-h-screen">
@@ -310,6 +315,60 @@ export default function ModuleDetail() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+        {examPlan && predictor && (
+          <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="font-medium text-foreground text-lg">AI Exam Predictor</h3>
+                <p className="text-sm text-muted-foreground mt-1">{predictor.explanation}</p>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-muted-foreground">Model</div>
+                <div className="text-sm font-medium text-foreground">{predictor.modelType}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="rounded-md border border-border p-3">
+                <div className="text-xs text-muted-foreground">Risk</div>
+                <div className={`text-sm font-medium ${predictorToneClass}`}>{predictorBandLabel}</div>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <div className="text-xs text-muted-foreground">Projected Readiness</div>
+                <div className="text-sm font-medium text-foreground">{predictor.projectedReadiness}%</div>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <div className="text-xs text-muted-foreground">Confidence</div>
+                <div className="text-sm font-medium text-foreground">{predictor.confidence}%</div>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <div className="text-xs text-muted-foreground">Untested Topics</div>
+                <div className="text-sm font-medium text-foreground">{predictor.untestedTopicCount}</div>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <div className="text-xs text-muted-foreground">Daily Target</div>
+                <div className="text-sm font-medium text-foreground">{predictor.dailyTopicTarget} topic/day</div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-xs text-muted-foreground mb-2">Priority Weak Topics</div>
+              <div className="flex flex-wrap gap-2">
+                {predictor.priorityTopics.length ? (
+                  predictor.priorityTopics.map((item) => (
+                    <span key={item.topicName} className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-sm text-foreground">
+                      <span>{item.topicName}</span>
+                      <span className="text-xs text-muted-foreground">{item.masteryPct}%</span>
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm text-muted-foreground">No weak topics detected yet.</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-card border border-border rounded-lg p-5">
           <h3 className="font-medium text-foreground text-lg mb-4">Study Session</h3>
           {!activeSession ? (
