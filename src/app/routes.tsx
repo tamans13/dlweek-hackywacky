@@ -8,6 +8,7 @@ import Insights from "./pages/Insights";
 import ExamReadiness from "./pages/ExamReadiness";
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
+import Login from "./pages/Login";
 import OnboardingWelcome from "./pages/onboarding/Welcome";
 import OnboardingPreferences from "./pages/onboarding/Preferences";
 import OnboardingPermissions from "./pages/onboarding/Permissions";
@@ -16,7 +17,7 @@ import { Navigate } from "react-router";
 import { hasAuthSession } from "./lib/api";
 
 function RootRedirect() {
-  return hasAuthSession() ? <Navigate to="/dashboard" replace /> : <Navigate to="/onboarding/welcome" replace />;
+  return hasAuthSession() ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />;
 }
 
 function OnboardingGate() {
@@ -24,13 +25,17 @@ function OnboardingGate() {
 }
 
 function DashboardGate() {
-  return hasAuthSession() ? <DashboardLayout /> : <Navigate to="/onboarding/welcome" replace />;
+  return hasAuthSession() ? <DashboardLayout /> : <Navigate to="/login" replace />;
 }
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <RootRedirect />,
+  },
+  {
+    path: "/login",
+    element: hasAuthSession() ? <Navigate to="/dashboard" replace /> : <Login />,
   },
   {
     path: "/onboarding",

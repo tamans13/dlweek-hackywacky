@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router";
+import { useParams, Link, useNavigate, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   Calendar,
@@ -53,6 +53,8 @@ export default function TopicDetail() {
 
   const [form, setForm] = useState({ preScore: "", postScore: "", confidence: "3", aiUsed: false });
   const [resultMessage, setResultMessage] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoQuizTriggeredRef = useRef(false);
 
   const [documents, setDocuments] = useState<TopicDocument[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -161,8 +163,10 @@ export default function TopicDetail() {
         setDocuments(docs.documents);
         setQuizzes(quizList.quizzes);
 
+        const requestedQuizId = searchParams.get("quizId");
         if (quizList.quizzes.length) {
-          setActiveQuizId((prev) => prev || quizList.quizzes[0].id);
+          const requested = requestedQuizId ? quizList.quizzes.find((quiz) => quiz.id === requestedQuizId) : null;
+          setActiveQuizId((prev) => requested?.id || prev || quizList.quizzes[0].id);
         } else {
           setActiveQuizId("");
         }
@@ -179,7 +183,43 @@ export default function TopicDetail() {
     return () => {
       cancelled = true;
     };
-  }, [moduleName, topicName]);
+  }, [moduleName, topicName, searchParams]);
+
+  useEffect(() => {
+    const autoQuizRaw = searchParams.get("autoQuiz");
+    if (!autoQuizRaw) return;
+    if (!moduleName || !topicName) return;
+    if (autoQuizTriggeredRef.current) return;
+
+    const count = Math.max(3, Math.min(10, Number(autoQuizRaw || 10)));
+    autoQuizTriggeredRef.current = true;
+    setGeneratingQuiz(true);
+    setQuizStatusMessage("");
+    setQuizResult(null);
+    setResourceError("");
+
+    void (async () => {
+      try {
+        const generated = await generateTopicQuiz({ moduleName, topicName, questionCount: count });
+        setQuizStatusMessage(
+          `Generated ${generated.quiz.questions.length} questions from ${generated.sourceDocumentCount} uploaded file${generated.sourceDocumentCount === 1 ? "" : "s"}.`,
+        );
+        const latest = await fetchTopicQuizzes(moduleName, topicName);
+        setQuizzes(latest.quizzes);
+        setActiveQuizId(generated.quiz.id);
+        setSelectedAnswers({});
+
+        const next = new URLSearchParams(searchParams);
+        next.delete("autoQuiz");
+        next.set("quizId", generated.quiz.id);
+        setSearchParams(next, { replace: true });
+      } catch (err) {
+        setResourceError(err instanceof Error ? err.message : "Failed to generate quiz.");
+      } finally {
+        setGeneratingQuiz(false);
+      }
+    })();
+  }, [moduleName, topicName, searchParams, setSearchParams]);
 
   const handleQuizSubmit = async () => {
     if (!moduleName || !topicName) return;
@@ -231,7 +271,17 @@ export default function TopicDetail() {
 
       const result = await uploadTopicFiles({ moduleName, topicName, files });
       setDocuments(result.documents);
-      setUploadMessage(`${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"} uploaded.`);
+      const uploadedCount = result.uploaded.length;
+      const skippedCount = Array.isArray(result.skipped) ? result.skipped.length : 0;
+      if (uploadedCount > 0 && skippedCount > 0) {
+        setUploadMessage(`${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded, ${skippedCount} duplicate file${skippedCount === 1 ? "" : "s"} skipped.`);
+      } else if (uploadedCount > 0) {
+        setUploadMessage(`${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded.`);
+      } else if (skippedCount > 0) {
+        setUploadMessage(`No new files uploaded. ${skippedCount} duplicate file${skippedCount === 1 ? "" : "s"} skipped.`);
+      } else {
+        setUploadMessage("No files were uploaded.");
+      }
     } catch (err) {
       setResourceError(err instanceof Error ? err.message : "File upload failed.");
     } finally {

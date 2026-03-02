@@ -125,10 +125,18 @@ export default function ModuleDetail() {
     if (!activeSession) return;
     await stopSession(activeSession.id);
     await stopExtensionTracking("user_ended_session").catch(() => { });
-    const takeQuiz = window.confirm("Session ended. Take a quiz for this topic now?");
-    if (takeQuiz) {
-      navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(activeSession.topicName)}`);
+    
+    // Ask user if they want to take a quiz
+    const takeQuiz = window.confirm("Session ended! 🎉\n\nWould you like to take a quiz now? (An AI quiz with 10 questions will be auto-generated from your notes.)");
+    
+    if (!takeQuiz) {
+      // User declined - return to module page
+      navigate(`/dashboard/modules/${toSlug(moduleName)}`);
+      return;
     }
+    
+    // Navigate first, then auto-generate in TopicDetail to avoid first-attempt race/mismatch issues.
+    navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(activeSession.topicName)}?autoQuiz=10`);
   };
 
   const handleAddTopic = async () => {

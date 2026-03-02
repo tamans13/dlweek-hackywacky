@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -129,6 +129,13 @@ export default function OnboardingWelcome() {
         </Button>
         <p className="text-xs text-muted-foreground">
           Use the same email/password next time to access your saved modules, documents, and quiz history.
+        </p>
+        <p className="text-xs text-muted-foreground text-center">
+          Returning user?{" "}
+          <Link to="/login" className="text-primary hover:underline">
+            Log in here
+          </Link>
+          .
         </p>
       </div>
     </div>

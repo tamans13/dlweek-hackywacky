@@ -5,7 +5,6 @@ import {
   TrendingUp, 
   Target, 
   Settings as SettingsIcon,
-  Brain,
   User,
   LogOut,
 } from "lucide-react";
@@ -39,8 +38,8 @@ export default function DashboardLayout() {
       <aside className="w-60 bg-card border-r border-border flex flex-col">
         <div className="p-5 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
-              <Brain className="w-5 h-5 text-primary-foreground" />
+            <div className="w-9 h-9 rounded-lg overflow-hidden border border-border bg-primary/10">
+              <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
             </div>
             <div>
                   <h3 className="text-base font-medium text-foreground">Brainosaur</h3>
@@ -78,7 +77,7 @@ export default function DashboardLayout() {
             type="button"
             onClick={() => {
               logout();
-              window.location.href = "/onboarding/welcome";
+              window.location.href = "/login";
             }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-foreground hover:bg-muted transition-colors"
           >

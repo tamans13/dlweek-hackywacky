@@ -25,14 +25,49 @@ const BRAINOSAUR_HOSTS = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:3000"
 ];
-
-const PROMPT_COOLDOWN_MS = 60_000;
 const TRACKING_STORAGE_KEY = "brainosaur_tracking_state";
+const PROMPT_COOLDOWN_MS = 20_000;
 
+const DEBUG = true;
 const lastPromptAtByTabId = new Map();
+
+function storageGet(keys) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(keys, (result) => {
+        const err = chrome.runtime?.lastError;
+        if (err) {
+          if (DEBUG) console.warn("[Brainosaur] storage.get failed:", err.message);
+          resolve({});
+          return;
+        }
+        resolve(result || {});
+      });
+    } catch (e) {
+      if (DEBUG) console.warn("[Brainosaur] storage.get threw:", e);
+      resolve({});
+    }
+  });
+}
+
+function storageSet(obj) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set(obj, () => {
+        const err = chrome.runtime?.lastError;
+        if (err && DEBUG) console.warn("[Brainosaur] storage.set failed:", err.message);
+        resolve();
+      });
+    } catch (e) {
+      if (DEBUG) console.warn("[Brainosaur] storage.set threw:", e);
+      resolve();
+    }
+  });
+}
 
 let trackingEnabled = false;
 let currentSessionId = null;
+let currentAppOrigin = null;
 let initStatePromise = null;
 
 let activeTabId = null;
@@ -71,16 +106,11 @@ function isDistraction(url) {
 }
 
 function isBrainosaurWebAppUrl(url) {
-  return !!url && BRAINOSAUR_HOSTS.some((host) => url.startsWith(host));
+  if (!url) return false;
+  if (currentAppOrigin && url.startsWith(currentAppOrigin)) return true;
+  return BRAINOSAUR_HOSTS.some((host) => url.startsWith(host));
 }
 
-function canPrompt(tabId) {
-  const now = Date.now();
-  const last = lastPromptAtByTabId.get(tabId) || 0;
-  if (now - last < PROMPT_COOLDOWN_MS) return false;
-  lastPromptAtByTabId.set(tabId, now);
-  return true;
-}
 
 function msToSec(ms) {
   return Math.round(ms / 1000);
@@ -113,13 +143,22 @@ function resetSessionState() {
   lastPromptAtByTabId.clear();
 }
 
+function canPrompt(tabId) {
+  const now = Date.now();
+  const last = lastPromptAtByTabId.get(tabId) || 0;
+  if (now - last < PROMPT_COOLDOWN_MS) return false;
+  lastPromptAtByTabId.set(tabId, now);
+  return true;
+}
+
 async function loadTrackingState() {
   try {
-    const result = await chrome.storage.local.get(TRACKING_STORAGE_KEY);
+    const result = await storageGet(TRACKING_STORAGE_KEY);
     const saved = result?.[TRACKING_STORAGE_KEY];
     if (saved && typeof saved === "object") {
       trackingEnabled = !!saved.enabled;
       currentSessionId = saved.sessionId || null;
+      currentAppOrigin = saved.appOrigin || null;
       return;
     }
   } catch (e) {
@@ -127,6 +166,7 @@ async function loadTrackingState() {
   }
   trackingEnabled = false;
   currentSessionId = null;
+  currentAppOrigin = null;
 }
 
 function ensureStateLoaded() {
@@ -138,10 +178,11 @@ function ensureStateLoaded() {
 
 async function persistTrackingState() {
   try {
-    await chrome.storage.local.set({
+    await storageSet({
       [TRACKING_STORAGE_KEY]: {
         enabled: trackingEnabled,
-        sessionId: currentSessionId
+        sessionId: currentSessionId,
+        appOrigin: currentAppOrigin
       }
     });
   } catch (e) {
@@ -155,6 +196,39 @@ async function safeSendToTab(tabId, message) {
   } catch {
     return null;
   }
+}
+
+async function ensureOverlayInjected(tabId) {
+  if (!chrome?.scripting) return false;
+  try {
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ["overlay.css"],
+    });
+  } catch {
+    // css may already be injected
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["overlay.js"],
+    });
+    return true;
+  } catch (e) {
+    if (DEBUG) console.warn("[Brainosaur] overlay injection failed", e);
+    return false;
+  }
+}
+
+async function showPromptOnTab(tabId, url) {
+  const firstTry = await safeSendToTab(tabId, { action: "show_prompt", url });
+  if (firstTry?.success) return true;
+
+  const injected = await ensureOverlayInjected(tabId);
+  if (!injected) return false;
+
+  const secondTry = await safeSendToTab(tabId, { action: "show_prompt", url });
+  return Boolean(secondTry?.success);
 }
 
 async function broadcastToAllTabs(message) {
@@ -182,11 +256,22 @@ async function sendToBrainosaurTabs(payload) {
   }
 }
 
-async function startTracking(sessionId) {
+function originFromUrl(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+async function startTracking(sessionId, appOrigin = null) {
   trackingEnabled = true;
   currentSessionId = sessionId || `session_${Date.now()}`;
+  currentAppOrigin = appOrigin || currentAppOrigin || null;
   resetSessionState();
   await persistTrackingState();
+
+  if (DEBUG) console.log("[Brainosaur] START_TRACKING", { sessionId: currentSessionId });
 
   await sendToBrainosaurTabs({
     event: "tracking_status",
@@ -194,6 +279,9 @@ async function startTracking(sessionId) {
     sessionId: currentSessionId,
     timestamp: nowIso()
   });
+
+  // Let all tabs clear any stale allow-pass from prior sessions.
+  await broadcastToAllTabs({ action: "tracking_enabled", sessionId: currentSessionId });
 
   // Prompt immediately if study starts while user is already on a distracting tab.
   try {
@@ -209,6 +297,8 @@ async function startTracking(sessionId) {
 async function stopTracking(reason = "stopped") {
   if (!trackingEnabled) return;
   flushTime();
+
+  if (DEBUG) console.log("[Brainosaur] STOP_TRACKING", { reason, sessionId: currentSessionId });
 
   const finalTotals = {
     distractionSec: msToSec(totals.distractionMs),
@@ -232,6 +322,7 @@ async function stopTracking(reason = "stopped") {
   await broadcastToAllTabs({ action: "tracking_disabled" });
 
   currentSessionId = null;
+  currentAppOrigin = null;
   await persistTrackingState();
 }
 
@@ -239,7 +330,9 @@ async function handleActiveContextChange(tabId, url) {
   if (!trackingEnabled) return;
   if (!tabId || !url) return;
 
-  if (activeTabId !== tabId || activeUrl !== url) {
+  const contextChanged = activeTabId !== tabId || activeUrl !== url;
+
+  if (contextChanged) {
     flushTime();
     activeTabId = tabId;
     activeUrl = url;
@@ -247,6 +340,8 @@ async function handleActiveContextChange(tabId, url) {
   }
 
   const category = classifyUrl(url);
+
+  if (DEBUG) console.log("[Brainosaur] ACTIVE_CONTEXT", { tabId, url, category, contextChanged });
 
   await sendToBrainosaurTabs({
     event: "tab_activity",
@@ -262,15 +357,10 @@ async function handleActiveContextChange(tabId, url) {
     }
   });
 
+  // Show the blue-screen prompt every time the user opens/switches to a distracting site
+  // during an active study session.
   if (category === "distraction" && canPrompt(tabId)) {
-    const promptAck = await safeSendToTab(tabId, { action: "show_prompt", url });
-    if (!promptAck) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch {
-        // ignore remove errors
-      }
-    }
+    await showPromptOnTab(tabId, url);
   }
 }
 
@@ -280,7 +370,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       await ensureStateLoaded();
 
       if (request?.type === "START_TRACKING") {
-        await startTracking(request.sessionId);
+        const senderOrigin = originFromUrl(sender?.tab?.url || "");
+        await startTracking(request.sessionId, senderOrigin);
         sendResponse({ ok: true, enabled: true, sessionId: currentSessionId });
         return;
       }
@@ -296,6 +387,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
 
+      if (request?.action === "check_current_url") {
+        sendResponse({ isDistraction: trackingEnabled && isDistraction(request.url) });
+        return;
+      }
+
       if (request?.action === "terminate_session") {
         await sendToBrainosaurTabs({
           event: "terminate_session",
@@ -304,25 +400,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           url: sender?.tab?.url || null,
           timestamp: nowIso()
         });
-
         await stopTracking("terminated_from_overlay");
+        sendResponse({ ok: true });
+        return;
+      }
 
+      if (request?.action === "close_this_tab") {
         if (sender?.tab?.id) {
-          await chrome.tabs.remove(sender.tab.id);
+          try {
+            await chrome.tabs.remove(sender.tab.id);
+          } catch {
+            // ignore close failures
+          }
         }
-
         sendResponse({ ok: true });
-        return;
-      }
-
-      if (request?.action === "close_this_tab" && sender?.tab?.id) {
-        await chrome.tabs.remove(sender.tab.id);
-        sendResponse({ ok: true });
-        return;
-      }
-
-      if (request?.action === "check_current_url") {
-        sendResponse({ isDistraction: trackingEnabled && isDistraction(request.url) });
         return;
       }
 
@@ -352,7 +443,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!tab?.active) return;
 
   if (changeInfo.url || changeInfo.status === "complete") {
-    const url = tab.url || changeInfo.url;
+    const url = changeInfo.url || tab.url;
     if (url) await handleActiveContextChange(tabId, url);
   }
 });

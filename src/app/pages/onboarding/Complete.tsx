@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
-import { CheckCircle2, Brain } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useAppData } from "../../state/AppDataContext";
 import { generateOnboardingPersona } from "../../lib/api";
 import type { OnboardingPersonaAnalysis } from "../../lib/api";
@@ -41,7 +41,7 @@ function readSessionJson<T>(key: string, fallback: T): T {
 
 export default function OnboardingComplete() {
   const navigate = useNavigate();
-  const { authenticate, saveProfileData } = useAppData();
+  const { signupUser, saveProfileData } = useAppData();
   const [submitting, setSubmitting] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState("");
@@ -94,7 +94,7 @@ export default function OnboardingComplete() {
         throw new Error("Missing email/password from onboarding. Go back and enter credentials.");
       }
 
-      await authenticate(email, password);
+      await signupUser(email, password);
 
       await saveProfileData({
         fullName: String(welcome.fullName || welcome.name || ""),
@@ -106,7 +106,7 @@ export default function OnboardingComplete() {
       });
       navigate("/dashboard");
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : "Failed to sign in and save your profile.");
+      setAuthError(err instanceof Error ? err.message : "Failed to sign up and save your profile.");
     } finally {
       setSubmitting(false);
     }
@@ -127,8 +127,8 @@ export default function OnboardingComplete() {
 
       <div className="bg-card border border-border rounded-2xl p-8 shadow-sm">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Brain className="w-7 h-7 text-primary" />
+          <div className="w-12 h-12 rounded-xl overflow-hidden border border-border bg-primary/10">
+            <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
           </div>
           <div>
             <h3 className="text-sm text-muted-foreground">Preliminary Study Persona</h3>

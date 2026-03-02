@@ -10,13 +10,14 @@ import {
   fetchState,
   generateInsights,
   hasAuthSession,
+  login,
   logTabEvent,
-  loginOrSignup,
   saveProfile,
+  signup,
   startStudySession,
   stopStudySession,
   submitQuiz,
-  uploadTopicDocuments,
+  uploadTopicFiles as uploadTopicFilesApi,
   updateExamPlan,
 } from "../lib/api";
 import { startExtensionTracking, stopExtensionTracking } from "../lib/extension";
@@ -30,7 +31,8 @@ interface AppDataContextValue {
   authenticated: boolean;
   authUser: AuthUser | null;
   refresh: () => Promise<void>;
-  authenticate: (email: string, password: string) => Promise<void>;
+  loginUser: (email: string, password: string) => Promise<void>;
+  signupUser: (email: string, password: string) => Promise<void>;
   logout: () => void;
   saveProfileData: (payload: {
     fullName?: string;
@@ -119,9 +121,17 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const authenticate = useCallback(
+  const loginUser = useCallback(
     async (email: string, password: string) => {
-      await loginOrSignup(email, password);
+      await login(email, password);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const signupUser = useCallback(
+    async (email: string, password: string) => {
+      await signup(email, password);
       await refresh();
     },
     [refresh],
@@ -240,7 +250,31 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const uploadTopicFiles = useCallback(
     async (payload: { moduleName: string; topicName: string; files: File[] }) => {
-      await uploadTopicDocuments(payload);
+      const files = await Promise.all(
+        payload.files.map(
+          async (file) =>
+            new Promise<{ name: string; type: string; dataBase64: string }>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const result = String(reader.result || "");
+                const dataBase64 = result.includes(",") ? result.split(",")[1] : result;
+                resolve({
+                  name: file.name,
+                  type: file.type || "application/octet-stream",
+                  dataBase64,
+                });
+              };
+              reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+              reader.readAsDataURL(file);
+            }),
+        ),
+      );
+
+      await uploadTopicFilesApi({
+        moduleName: payload.moduleName,
+        topicName: payload.topicName,
+        files,
+      });
       await refresh();
     },
     [refresh],
@@ -262,7 +296,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       authenticated: Boolean(authUser),
       authUser,
       refresh,
-      authenticate,
+      loginUser,
+      signupUser,
       logout,
       saveProfileData,
       startSession,
@@ -282,7 +317,8 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       readiness,
       authUser,
       refresh,
-      authenticate,
+      loginUser,
+      signupUser,
       logout,
       saveProfileData,
       startSession,

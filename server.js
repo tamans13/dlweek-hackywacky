@@ -393,35 +393,35 @@ async function resolveRequestUser(req) {
   return resolveSupabaseUserFromToken(accessToken);
 }
 
-async function loginOrSignupWithSupabase(email, password) {
-  function normalizeAuthPayload(raw) {
-    if (!raw || typeof raw !== 'object') return null;
+function normalizeSupabaseAuthPayload(raw, fallbackEmail = '') {
+  if (!raw || typeof raw !== 'object') return null;
 
-    const userRaw = raw.user && typeof raw.user === 'object' ? raw.user : null;
-    if (!userRaw || !userRaw.id) return null;
+  const userRaw = raw.user && typeof raw.user === 'object' ? raw.user : null;
+  if (!userRaw || !userRaw.id) return null;
 
-    const sessionRaw = raw.session && typeof raw.session === 'object' ? raw.session : raw;
-    const accessToken = String(sessionRaw.access_token || '');
-    const refreshToken = String(sessionRaw.refresh_token || '');
-    const tokenType = String(sessionRaw.token_type || 'bearer');
-    const expiresIn = Number(sessionRaw.expires_in || 0);
+  const sessionRaw = raw.session && typeof raw.session === 'object' ? raw.session : raw;
+  const accessToken = String(sessionRaw.access_token || '');
+  const refreshToken = String(sessionRaw.refresh_token || '');
+  const tokenType = String(sessionRaw.token_type || 'bearer');
+  const expiresIn = Number(sessionRaw.expires_in || 0);
 
-    if (!accessToken || !refreshToken || !expiresIn) return null;
+  if (!accessToken || !refreshToken || !expiresIn) return null;
 
-    return {
-      user: {
-        id: String(userRaw.id),
-        email: String(userRaw.email || email),
-      },
-      session: {
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        expires_in: expiresIn,
-        token_type: tokenType,
-      },
-    };
-  }
+  return {
+    user: {
+      id: String(userRaw.id),
+      email: String(userRaw.email || fallbackEmail),
+    },
+    session: {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: expiresIn,
+      token_type: tokenType,
+    },
+  };
+}
 
+async function signInWithSupabase(email, password) {
   if (!SUPABASE_ENABLED) {
     return {
       user: { id: 'local-user', email },
@@ -440,15 +440,30 @@ async function loginOrSignupWithSupabase(email, password) {
     body: { email, password },
   });
 
-  if (signinRes.ok) {
-    const signinData = await signinRes.json();
-    const normalizedSignin = normalizeAuthPayload(signinData);
-    if (normalizedSignin) return normalizedSignin;
-
-    throw new Error('Sign-in response did not include a valid session. Check Supabase Auth settings.');
+  if (!signinRes.ok) {
+    const text = await signinRes.text();
+    throw new Error(`Sign-in failed: ${supabaseErrorText(signinRes.status, text)}`);
   }
 
-  const signinText = await signinRes.text();
+  const signinData = await signinRes.json();
+  const normalizedSignin = normalizeSupabaseAuthPayload(signinData, email);
+  if (normalizedSignin) return normalizedSignin;
+
+  throw new Error('Sign-in response did not include a valid session. Check Supabase Auth settings.');
+}
+
+async function signUpWithSupabase(email, password) {
+  if (!SUPABASE_ENABLED) {
+    return {
+      user: { id: 'local-user', email },
+      session: {
+        access_token: 'local-dev-token',
+        refresh_token: 'local-dev-refresh',
+        expires_in: 60 * 60 * 24 * 30,
+        token_type: 'bearer',
+      },
+    };
+  }
 
   const signupRes = await supabaseRequest('/auth/v1/signup', {
     method: 'POST',
@@ -456,23 +471,33 @@ async function loginOrSignupWithSupabase(email, password) {
     body: { email, password },
   });
 
-  if (signupRes.ok) {
-    const signupData = await signupRes.json();
-    const normalizedSignup = normalizeAuthPayload(signupData);
-    if (normalizedSignup) return normalizedSignup;
-
-    if (signupData && signupData.user && signupData.user.id) {
-      throw new Error('Account created, but email confirmation is required before first login. Check your email, confirm the account, then sign in again.');
-    }
-
-    throw new Error('Sign-up succeeded but no usable session was returned by Supabase.');
+  if (!signupRes.ok) {
+    const text = await signupRes.text();
+    throw new Error(`Sign-up failed: ${supabaseErrorText(signupRes.status, text)}`);
   }
 
-  const signupText = await signupRes.text();
-  throw new Error(`Sign-in failed: ${supabaseErrorText(signinRes.status, signinText)} | Sign-up failed: ${supabaseErrorText(signupRes.status, signupText)}`);}
+  const signupData = await signupRes.json();
+  const normalizedSignup = normalizeSupabaseAuthPayload(signupData, email);
+  if (normalizedSignup) return normalizedSignup;
+
+  if (signupData && signupData.user && signupData.user.id) {
+    throw new Error('Account created, but email confirmation is required before first login. Check your email, confirm the account, then sign in again.');
+  }
+
+  throw new Error('Sign-up succeeded but no usable session was returned by Supabase.');
+}
+
 function learningGain(preScore, postScore) {
   const denom = Math.max(1, 100 - preScore);
   return clamp((postScore - preScore) / denom, -1, 1);
+}
+
+function masteryToPercent(mastery) {
+  return clamp(Number(mastery || 0) * 10, 0, 100);
+}
+
+function percentToMastery(percent) {
+  return clamp(Number(percent || 0) / 10, 1, 10);
 }
 
 function classifyUrl(url) {
@@ -503,21 +528,169 @@ function topicState(mod, topicName) {
       createdAt: nowIso(),
       lastInteractionAt: nowIso(),
       lastQuizAt: null,
+      lastDecayAppliedAt: nowIso(),
       nextReviewAt: nowIso(),
       history: [],
       documents: [],
     };
   }
   if (!Array.isArray(mod.topics[topicName].documents)) mod.topics[topicName].documents = [];
+  if (!mod.topics[topicName].lastDecayAppliedAt) {
+    mod.topics[topicName].lastDecayAppliedAt = mod.topics[topicName].lastInteractionAt || nowIso();
+  }
   return mod.topics[topicName];
 }
 
-function retentionDecay(topic, currentTimeIso) {
+function aiRetentionDecayRatePercent(topic, moduleName, data, currentTimeIso) {
   const last = topic.lastInteractionAt || topic.createdAt || currentTimeIso;
-  const days = daysBetween(last, currentTimeIso);
-  const masteryFactor = (11 - (topic.mastery || 5)) / 10;
-  const baseDecayPerDay = 0.04;
-  return clamp(days * baseDecayPerDay * masteryFactor, 0, 2.5);
+  const daysIdle = daysBetween(last, currentTimeIso);
+  const masteryPct = masteryToPercent(topic.mastery || 5);
+
+  const moduleEvents = data.tabEvents.filter((e) => e.moduleName === moduleName).slice(-300);
+  const distraction = moduleEvents.filter((e) => e.eventType === 'distraction').length;
+  const focused = moduleEvents.filter((e) => e.eventType === 'learning').length;
+  const help = moduleEvents.filter((e) => e.eventType === 'help').length;
+  const distractionRatio = distraction / Math.max(1, focused + distraction + help);
+
+  const topicAttempts = data.quizAttempts
+    .filter((q) => q.moduleName === moduleName && q.topicName === topic.topicName)
+    .slice(-8);
+  const meanAccuracy = topicAttempts.length
+    ? topicAttempts.reduce((sum, item) => sum + Number(item.postScore || 0), 0) / topicAttempts.length
+    : masteryPct;
+  const consistency = topicAttempts.length > 1
+    ? 1 - clamp(stdDev(topicAttempts.map((x) => Number(x.postScore || 0))) / 40, 0, 0.6)
+    : 0.7;
+
+  const moduleFocusEfficiency = clamp(Number(moduleState(data, moduleName).focusEfficiency || 0) / 100, 0, 1);
+  const memoryStrengthDays = clamp(
+    1.5
+      + masteryPct / 14
+      + meanAccuracy / 35
+      + consistency * 2
+      + moduleFocusEfficiency * 2
+      - distractionRatio * 4
+      - Math.min(daysIdle / 10, 2),
+    1,
+    18,
+  );
+
+  // Ebbinghaus-style forgetting curve, converted to percentage points/day.
+  const retentionAfterOneDay = Math.exp(-1 / memoryStrengthDays);
+  const baseDecayPerDayPct = (1 - retentionAfterOneDay) * 100 * 0.22;
+  const inactivityAmplifier = 1 + clamp(daysIdle / 12, 0, 1.2);
+  return clamp(baseDecayPerDayPct * inactivityAmplifier, 0.3, 12);
+}
+
+function retentionDecay(topic, moduleName, data, currentTimeIso, daysOverride) {
+  const anchor = topic.lastDecayAppliedAt || topic.lastInteractionAt || topic.createdAt || currentTimeIso;
+  const days = Number.isFinite(daysOverride) ? Number(daysOverride) : daysBetween(anchor, currentTimeIso);
+  const dailyPct = aiRetentionDecayRatePercent(topic, moduleName, data, currentTimeIso);
+  return (dailyPct * Math.max(0, days)) / 10;
+}
+
+function applyDailyMasteryDecay(topic, moduleName, data, currentTimeIso) {
+  const anchor = topic.lastDecayAppliedAt || topic.lastInteractionAt || topic.createdAt || currentTimeIso;
+  const fullDays = Math.floor(daysBetween(anchor, currentTimeIso));
+  if (fullDays <= 0) return { daysApplied: 0, decayPct: 0 };
+
+  const decayPoints = retentionDecay(topic, moduleName, data, currentTimeIso, fullDays);
+  const oldPct = masteryToPercent(topic.mastery);
+  const decayPct = decayPoints * 10;
+  const newPct = clamp(oldPct - decayPct, 0, 100);
+  topic.mastery = percentToMastery(newPct);
+  topic.lastDecayAppliedAt = new Date(new Date(anchor).getTime() + fullDays * 86400000).toISOString();
+  return { daysApplied: fullDays, decayPct };
+}
+
+function buildAdaptiveDifficultyPlan(currentMasteryPct, preScore, decayRatePct) {
+  const current = clamp(Number(currentMasteryPct || 0), 0, 100);
+  const baselinePre = clamp(Number(preScore || 0), 0, 100);
+  const targetMasteryPct = clamp(current < 80 ? current + 20 : current + 10, 0, 100);
+  const requiredGainPct = Math.max(0, targetMasteryPct - current + clamp(Number(decayRatePct || 0), 0, 20));
+  const requiredGainRatio = requiredGainPct / 100;
+  const targetPostScore = clamp(
+    baselinePre + requiredGainRatio * Math.max(1, 100 - baselinePre),
+    0,
+    100,
+  );
+
+  let difficulty = 'medium';
+  if (current < 40) difficulty = 'easy';
+  else if (current >= 70) difficulty = 'hard';
+
+  return {
+    currentMasteryPct: Math.round(current),
+    targetMasteryPct: Math.round(targetMasteryPct),
+    targetPostScore: Math.round(targetPostScore),
+    requiredGainPct: Math.round(requiredGainPct),
+    difficulty,
+  };
+}
+
+function applyMasteryUpdateFromQuiz(data, moduleName, topicName, preScore, postScore, options = {}) {
+  const boundedPre = clamp(Number(preScore || 0), 0, 100);
+  const boundedPost = clamp(Number(postScore || 0), 0, 100);
+  const boundedConfidence = Number.isFinite(options.confidence) ? clamp(Number(options.confidence), 1, 5) : 3;
+  const aiUsed = Boolean(options.aiUsed);
+  const source = String(options.source || 'quiz_submit');
+  const now = options.at || nowIso();
+
+  const mod = moduleState(data, moduleName);
+  const topic = topicState(mod, topicName);
+  applyDailyMasteryDecay(topic, moduleName, data, now);
+
+  const oldMastery = topic.mastery;
+  const oldMasteryPct = masteryToPercent(oldMastery);
+  const gain = learningGain(boundedPre, boundedPost);
+  const gainPct = gain * 100;
+  const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, now);
+
+  // Requested formula in percentage space:
+  // New mastery = old mastery + learning gain - retention decay rate
+  const newMasteryPct = clamp(oldMasteryPct + gainPct - decayRatePct, 0, 100);
+  topic.mastery = percentToMastery(newMasteryPct);
+  topic.lastInteractionAt = now;
+  topic.lastQuizAt = now;
+  topic.lastDecayAppliedAt = now;
+  topic.nextReviewAt = new Date(new Date(now).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+
+  const decay = decayRatePct / 10;
+  const difficultyPlan = buildAdaptiveDifficultyPlan(oldMasteryPct, boundedPre, decayRatePct);
+  topic.history.push({
+    at: now,
+    oldMastery,
+    newMastery: topic.mastery,
+    oldMasteryPct,
+    newMasteryPct,
+    preScore: boundedPre,
+    postScore: boundedPost,
+    confidence: boundedConfidence,
+    aiUsed,
+    source,
+    decay,
+    decayRatePct,
+    gain,
+    gainPct,
+    difficultyTarget: difficultyPlan,
+  });
+
+  return {
+    topic,
+    boundedPre,
+    boundedPost,
+    boundedConfidence,
+    aiUsed,
+    oldMastery,
+    newMastery: topic.mastery,
+    oldMasteryPct,
+    newMasteryPct,
+    gain,
+    gainPct,
+    decay,
+    decayRatePct,
+    difficultyPlan,
+  };
 }
 
 function reviewDays(mastery) {
@@ -574,21 +747,39 @@ function recomputeModuleScores(data, moduleName) {
 
   const attempts = recentAttempts.length;
   const meanAccuracy = attempts ? recentAttempts.reduce((a, b) => a + b.postScore, 0) / attempts : 0;
-  const focusPart = focused / Math.max(1, focused + distraction + help * 0.4);
-  const accuracyPart = meanAccuracy / 100;
-  mod.focusEfficiency = clamp((focusPart * 0.6 + accuracyPart * 0.4) * 100, 0, 100);
+  const questionVolume = recentAttempts.reduce((sum, item) => sum + Math.max(1, Number(item.total || 1)), 0);
+  const focusRatio = focused / Math.max(1, focused + distraction + help);
+  const distractionPenalty = distraction / Math.max(1, focused + distraction);
+  const attemptCoverage = clamp(questionVolume / 60, 0, 1);
+  const consistencyScore = 1 - clamp(stdDev(recentAttempts.map((x) => x.postScore)) / 35, 0, 1);
+  const sessionFocusScore = clamp(avgSession / 90, 0, 1);
 
-  const attemptedTopics = new Set(moduleAttempts.map((x) => x.topicName));
+  // "AI" focus efficiency blend from extension + quiz + effort features.
+  mod.focusEfficiency = clamp(
+    (
+      focusRatio * 0.34
+      + (meanAccuracy / 100) * 0.28
+      + attemptCoverage * 0.14
+      + consistencyScore * 0.12
+      + sessionFocusScore * 0.12
+      - distractionPenalty * 0.2
+    ) * 100,
+    0,
+    100,
+  );
+
+  let masterySumPct = 0;
+  let topicCount = 0;
   for (const topic of Object.values(mod.topics)) {
-    if (!attemptedTopics.has(topic.topicName)) {
-      topic.estimatedMasteryNow = 0;
-      topic.nextReviewAt = new Date(new Date(topic.lastInteractionAt).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
-      continue;
-    }
-    const decay = retentionDecay(topic, now);
+    applyDailyMasteryDecay(topic, moduleName, data, now);
+    const decay = retentionDecay(topic, moduleName, data, now);
     topic.estimatedMasteryNow = clamp(topic.mastery - decay, 1, 10);
     topic.nextReviewAt = new Date(new Date(topic.lastInteractionAt).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+    masterySumPct += masteryToPercent(topic.estimatedMasteryNow);
+    topicCount += 1;
   }
+
+  mod.masteryPercent = topicCount ? Math.round(masterySumPct / topicCount) : 0;
 
   mod.updatedAt = now;
 }
@@ -600,31 +791,35 @@ function readinessScore(moduleName, data) {
   const testedNames = Array.isArray(exam.topicsTested) ? exam.topicsTested : [];
   if (!testedNames.length) return { score: 0, reason: 'No data yet' };
 
+  const mod = moduleState(data, moduleName);
+  const topicStates = testedNames
+    .map((name) => mod.topics[name])
+    .filter(Boolean);
+  if (!topicStates.length) return { score: 0, reason: 'No data yet' };
+
+  const masteryPct = topicStates.reduce((sum, topic) => sum + masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery), 0) / topicStates.length;
   const testedSet = new Set(testedNames);
   const testedAttempts = data.quizAttempts.filter((q) => q.moduleName === moduleName && testedSet.has(q.topicName));
-  if (!testedAttempts.length) return { score: 0, reason: 'No data yet' };
+  const meanQuizScore = testedAttempts.length
+    ? testedAttempts.reduce((sum, q) => sum + clamp(Number(q.postScore || 0), 0, 100), 0) / testedAttempts.length
+    : masteryPct;
 
-  const postScoresByTopic = new Map();
-  for (const topicName of testedNames) postScoresByTopic.set(topicName, []);
-  for (const attempt of testedAttempts) {
-    if (!postScoresByTopic.has(attempt.topicName)) continue;
-    postScoresByTopic.get(attempt.topicName).push(clamp(Number(attempt.postScore || 0), 0, 100));
-  }
-  const topicAccuracies = testedNames.map((topicName) => {
-    const arr = postScoresByTopic.get(topicName) || [];
-    if (!arr.length) return 0;
-    return arr.reduce((sum, score) => sum + score, 0) / arr.length;
-  });
-  const masteryMean = topicAccuracies.reduce((sum, score) => sum + score, 0) / Math.max(1, topicAccuracies.length) / 10;
   const daysLeft = Math.max(0, daysBetween(nowIso(), exam.examDate));
   const coverageRatio = clamp((exam.topicsCovered || 0) / Math.max(1, testedNames.length), 0, 1);
+  const urgency = 1 - clamp(daysLeft / 45, 0, 1); // approaches 1 as exam nears
+  const focusTerm = clamp(Number(mod.focusEfficiency || 0), 0, 100);
+  const stabilityPenalty = testedAttempts.length > 1
+    ? clamp(stdDev(testedAttempts.map((q) => clamp(Number(q.postScore || 0), 0, 100))) / 2.5, 0, 18)
+    : 0;
 
-  const timePressure = daysLeft < 7 ? 0.65 : daysLeft < 14 ? 0.8 : 1;
-  const score = clamp((masteryMean / 10) * 55 + coverageRatio * 35 + timePressure * 10, 0, 100);
+  // AI-style readiness: mastery-led, adjusted by exam proximity.
+  const baseReadiness = masteryPct * 0.62 + meanQuizScore * 0.16 + focusTerm * 0.12 + coverageRatio * 100 * 0.10;
+  const proximityBoost = urgency * (masteryPct - 50) * 0.22;
+  const score = clamp(baseReadiness + proximityBoost - stabilityPenalty, 0, 100);
 
   return {
     score: Math.round(score),
-    reason: `Quiz-backed mastery ${masteryMean.toFixed(1)}/10, coverage ${(coverageRatio * 100).toFixed(0)}%, ${Math.ceil(daysLeft)} days to exam.`,
+    reason: `Mastery ${Math.round(masteryPct)}%, quiz ${Math.round(meanQuizScore)}%, focus ${Math.round(focusTerm)}%, coverage ${Math.round(coverageRatio * 100)}%, ${Math.ceil(daysLeft)} days to exam.`,
   };
 }
 
@@ -1090,22 +1285,6 @@ function parseMultipart(req) {
   });
 }
 
-async function apiHandler(req, res, pathname) {
-  const data = loadData();
-  if (!data.profile || typeof data.profile !== 'object') data.profile = {};
-  if (typeof data.profile.fullName !== 'string') data.profile.fullName = '';
-  if (typeof data.profile.email !== 'string') data.profile.email = '';
-
-  if (req.method === 'GET' && pathname === '/api/state') {
-    for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
-    saveData(data);
-    return send(res, 200, { ...data, aiEnabled: Boolean(OPENAI_API_KEY) });
-  }
-
-  const text = buffer.toString('utf8').replace(/\u0000/g, '');
-  return text.slice(0, 120000);
-}
-
 async function uploadToSupabaseStorage(userId, moduleName, topicName, fileName, mimeType, buffer) {
   const objectPath = [
     sanitizeSegment(userId),
@@ -1243,6 +1422,29 @@ async function listTopicDocuments(userId, moduleName, topicName, data) {
   }));
 }
 
+function toLegacyTopicDocumentSummary(doc) {
+  return {
+    id: String(doc.id),
+    name: String(doc.fileName || ''),
+    path: '',
+    uploadedAt: doc.uploadedAt || nowIso(),
+  };
+}
+
+async function syncTopicDocumentSummaries(userId, data, moduleNameFilter = null, topicNameFilter = null) {
+  const modules = moduleNameFilter ? [moduleNameFilter] : Object.keys(data.modules || {});
+  for (const moduleName of modules) {
+    const mod = data.modules[moduleName];
+    if (!mod || !mod.topics) continue;
+    const topicNames = topicNameFilter ? [topicNameFilter] : Object.keys(mod.topics);
+    for (const topicName of topicNames) {
+      if (!mod.topics[topicName]) continue;
+      const docs = await listTopicDocuments(userId, moduleName, topicName, data);
+      mod.topics[topicName].documents = docs.map(toLegacyTopicDocumentSummary);
+    }
+  }
+}
+
 async function deleteTopicDocuments(userId, moduleName, topicName, data) {
   if (!SUPABASE_ENABLED) {
     data.topicDocuments = data.topicDocuments.filter((x) => !(x.moduleName === moduleName && x.topicName === topicName));
@@ -1344,7 +1546,7 @@ function normalizeQuestions(rawQuestions, questionCount) {
   return out;
 }
 
-function buildHeuristicQuiz(moduleName, topicName, documents, questionCount) {
+function buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan = null) {
   const fullText = documents
     .map((doc) => String(doc.extractedText || ''))
     .join('\n')
@@ -1405,12 +1607,13 @@ function buildHeuristicQuiz(moduleName, topicName, documents, questionCount) {
     title: `${topicName} Quiz (${documents.length} source file${documents.length === 1 ? '' : 's'})`,
     questions,
     generator: 'heuristic',
+    difficultyPlan,
   };
 }
 
-async function buildAiQuiz(moduleName, topicName, documents, questionCount) {
+async function buildAiQuiz(moduleName, topicName, documents, questionCount, difficultyPlan = null) {
   if (!OPENAI_API_KEY) {
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
   }
 
   const context = documents
@@ -1422,8 +1625,12 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount) {
     .slice(0, 28000);
 
   if (!context.trim()) {
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
   }
+
+  const difficultyLine = difficultyPlan
+    ? `Difficulty target: ${difficultyPlan.difficulty}. Current mastery ${difficultyPlan.currentMasteryPct}%, target mastery ${difficultyPlan.targetMasteryPct}%, target quiz score ${difficultyPlan.targetPostScore}%.`
+    : 'Difficulty target: medium.';
 
   const prompt = [
     'You are a strict quiz generator for students.',
@@ -1433,6 +1640,7 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount) {
     `Create exactly ${questionCount} multiple-choice questions with 4 options each.`,
     `Module: ${moduleName}`,
     `Topic: ${topicName}`,
+    difficultyLine,
     'Rules:',
     '- Use only the provided documents.',
     '- Keep options plausible and avoid trick ambiguity.',
@@ -1458,7 +1666,7 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount) {
     if (!response.ok) {
       const text = await response.text();
       console.warn('Quiz generation OpenAI request failed', response.status, text);
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
     }
 
     const result = await response.json();
@@ -1466,22 +1674,23 @@ async function buildAiQuiz(moduleName, topicName, documents, questionCount) {
     const parsed = extractJsonObject(text);
 
     if (!parsed || !Array.isArray(parsed.questions)) {
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
     }
 
     const questions = normalizeQuestions(parsed.questions, questionCount);
     if (!questions.length) {
-      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+      return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
     }
 
     return {
       title: String(parsed.title || `${topicName} AI Quiz`).trim() || `${topicName} AI Quiz`,
       questions,
       generator: 'openai',
+      difficultyPlan,
     };
   } catch (err) {
     console.warn('Quiz generation error', err);
-    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount);
+    return buildHeuristicQuiz(moduleName, topicName, documents, questionCount, difficultyPlan);
   }
 }
 
@@ -1513,6 +1722,7 @@ function serializeQuizForClient(quiz, includeAnswers = false) {
     attempts: quiz.attempts || [],
     attemptCount: quiz.attemptCount || 0,
     lastAttempt: quiz.lastAttempt || null,
+    difficultyPlan: quiz.difficultyPlan || null,
   };
 }
 
@@ -1526,6 +1736,7 @@ async function createTopicQuiz(userId, quizRecord, data) {
       title: quizRecord.title,
       questions: quizRecord.questions,
       sourceDocumentIds: quizRecord.sourceDocumentIds || [],
+      difficultyPlan: quizRecord.difficultyPlan || null,
       createdAt: nowIso(),
     };
     data.generatedQuizzes.push(row);
@@ -1921,93 +2132,6 @@ async function ensureAuthenticatedUser(req, res) {
   }
   return user;
 }
-function safePathPart(value) {
-  const text = String(value || '').trim();
-  const cleaned = text.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
-  return cleaned || 'unknown';
-}
-
-function parseMultipartContentDisposition(headerLine) {
-  const nameMatch = /name="([^"]+)"/i.exec(headerLine);
-  const fileMatch = /filename="([^"]*)"/i.exec(headerLine);
-  return {
-    fieldName: nameMatch ? nameMatch[1] : '',
-    filename: fileMatch ? fileMatch[1] : '',
-  };
-}
-
-function parseMultipartBody(buffer, boundary) {
-  const raw = buffer.toString('latin1');
-  const delim = `--${boundary}`;
-  const parts = raw.split(delim).slice(1, -1);
-  const fields = {};
-  const files = [];
-
-  for (const partRaw of parts) {
-    let part = partRaw;
-    if (part.startsWith('\r\n')) part = part.slice(2);
-    if (part.endsWith('\r\n')) part = part.slice(0, -2);
-    const headerEnd = part.indexOf('\r\n\r\n');
-    if (headerEnd === -1) continue;
-
-    const headersText = part.slice(0, headerEnd);
-    const bodyText = part.slice(headerEnd + 4);
-    const headerLines = headersText.split('\r\n');
-    const disposition = headerLines.find((line) => line.toLowerCase().startsWith('content-disposition:'));
-    if (!disposition) continue;
-    const { fieldName, filename } = parseMultipartContentDisposition(disposition);
-    if (!fieldName) continue;
-
-    const contentTypeLine = headerLines.find((line) => line.toLowerCase().startsWith('content-type:'));
-    const contentType = contentTypeLine ? contentTypeLine.split(':')[1].trim() : 'application/octet-stream';
-    const valueBuffer = Buffer.from(bodyText, 'latin1');
-
-    if (filename) {
-      files.push({
-        fieldName,
-        filename: path.basename(filename),
-        contentType,
-        buffer: valueBuffer,
-      });
-    } else {
-      fields[fieldName] = valueBuffer.toString('utf8');
-    }
-  }
-
-  return { fields, files };
-}
-
-function parseMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const contentType = String(req.headers['content-type'] || '');
-    const boundaryMatch = /boundary=([^;]+)/i.exec(contentType);
-    if (!boundaryMatch) {
-      reject(new Error('Missing multipart boundary'));
-      return;
-    }
-    const boundary = boundaryMatch[1];
-    const chunks = [];
-    let total = 0;
-    req.on('data', (chunk) => {
-      total += chunk.length;
-      if (total > 25_000_000) {
-        reject(new Error('Upload too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    req.on('end', () => {
-      try {
-        const full = Buffer.concat(chunks);
-        resolve(parseMultipartBody(full, boundary));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
 
 async function apiHandler(req, res, parsedUrl) {
   const pathname = parsedUrl.pathname;
@@ -2026,7 +2150,7 @@ async function apiHandler(req, res, parsedUrl) {
     }
 
     try {
-      const authResult = await loginOrSignupWithSupabase(email, password);
+      const authResult = await signInWithSupabase(email, password);
       if (!authResult?.user?.id || !authResult?.session?.access_token) {
         throw new Error('Authentication response was incomplete. Please try again.');
       }
@@ -2046,6 +2170,43 @@ async function apiHandler(req, res, parsedUrl) {
       });
     } catch (err) {
       return send(res, 401, { error: err instanceof Error ? err.message : 'Authentication failed' });
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/auth/signup') {
+    const body = await parseBody(req);
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+
+    if (!email || !password) {
+      return send(res, 400, { error: 'email and password are required' });
+    }
+
+    if (password.length < 6) {
+      return send(res, 400, { error: 'password must be at least 6 characters' });
+    }
+
+    try {
+      const authResult = await signUpWithSupabase(email, password);
+      if (!authResult?.user?.id || !authResult?.session?.access_token) {
+        throw new Error('Sign-up response was incomplete. Please try again.');
+      }
+      return send(res, 200, {
+        ok: true,
+        user: {
+          id: authResult.user.id,
+          email: authResult.user.email || email,
+        },
+        session: {
+          accessToken: authResult.session.access_token,
+          refreshToken: authResult.session.refresh_token,
+          expiresIn: authResult.session.expires_in,
+          tokenType: authResult.session.token_type,
+        },
+        supabaseEnabled: SUPABASE_ENABLED,
+      });
+    } catch (err) {
+      return send(res, 401, { error: err instanceof Error ? err.message : 'Sign-up failed' });
     }
   }
 
@@ -2076,6 +2237,7 @@ async function apiHandler(req, res, parsedUrl) {
   const data = await loadDataForUser(user.id);
 
   if (req.method === 'GET' && pathname === '/api/state') {
+    await syncTopicDocumentSummaries(user.id, data);
     for (const moduleName of Object.keys(data.modules)) recomputeModuleScores(data, moduleName);
     await saveDataForUser(user.id, data);
     return send(res, 200, { ...data, aiEnabled: Boolean(OPENAI_API_KEY), supabaseEnabled: SUPABASE_ENABLED });
@@ -2223,7 +2385,11 @@ async function apiHandler(req, res, parsedUrl) {
     const mod = moduleState(data, moduleName);
     topicState(mod, topicName);
 
+    const existingDocuments = await listTopicDocuments(user.id, moduleName, topicName, data);
+    const existingNames = new Set(existingDocuments.map((doc) => String(doc.fileName || '').trim().toLowerCase()).filter(Boolean));
+
     const uploaded = [];
+    const skipped = [];
 
     for (const rawFile of files.slice(0, 8)) {
       const fileName = String(rawFile.name || rawFile.fileName || '').trim();
@@ -2231,6 +2397,11 @@ async function apiHandler(req, res, parsedUrl) {
       const dataBase64 = String(rawFile.dataBase64 || rawFile.base64 || '').trim();
 
       if (!fileName || !dataBase64) continue;
+      const normalizedName = fileName.toLowerCase();
+      if (existingNames.has(normalizedName)) {
+        skipped.push(fileName);
+        continue;
+      }
 
       const buffer = Buffer.from(dataBase64, 'base64');
       if (!buffer.length) continue;
@@ -2256,10 +2427,7 @@ async function apiHandler(req, res, parsedUrl) {
         data,
       );
       uploaded.push(record);
-    }
-
-    if (!uploaded.length) {
-      return send(res, 400, { error: 'No valid files were uploaded.' });
+      existingNames.add(normalizedName);
     }
 
     if (!SUPABASE_ENABLED) {
@@ -2267,6 +2435,31 @@ async function apiHandler(req, res, parsedUrl) {
     }
 
     const documents = await listTopicDocuments(user.id, moduleName, topicName, data);
+    topicState(mod, topicName).documents = documents.map(toLegacyTopicDocumentSummary);
+
+    if (!uploaded.length && skipped.length) {
+      await saveDataForUser(user.id, data);
+      return send(res, 200, {
+        ok: true,
+        uploaded: [],
+        skipped,
+        documents: documents.map((doc) => ({
+          id: doc.id,
+          moduleName: doc.moduleName,
+          topicName: doc.topicName,
+          fileName: doc.fileName,
+          mimeType: doc.mimeType,
+          uploadedAt: doc.uploadedAt,
+          textExtracted: Boolean(doc.extractedText),
+        })),
+      });
+    }
+
+    if (!uploaded.length) {
+      return send(res, 400, { error: 'No valid files were uploaded.' });
+    }
+
+    await saveDataForUser(user.id, data);
     return send(res, 200, {
       ok: true,
       uploaded: uploaded.map((doc) => ({
@@ -2275,6 +2468,7 @@ async function apiHandler(req, res, parsedUrl) {
         mimeType: doc.mimeType,
         uploadedAt: doc.uploadedAt,
       })),
+      skipped,
       documents: documents.map((doc) => ({
         id: doc.id,
         moduleName: doc.moduleName,
@@ -2328,7 +2522,14 @@ async function apiHandler(req, res, parsedUrl) {
       });
     }
 
-    const built = await buildAiQuiz(moduleName, topicName, docsWithText, questionCount);
+    const mod = moduleState(data, moduleName);
+    const topic = topicState(mod, topicName);
+    applyDailyMasteryDecay(topic, moduleName, data, nowIso());
+    const masteryPct = masteryToPercent(topic.estimatedMasteryNow ?? topic.mastery);
+    const decayRatePct = aiRetentionDecayRatePercent(topic, moduleName, data, nowIso());
+    const difficultyPlan = buildAdaptiveDifficultyPlan(masteryPct, masteryPct, decayRatePct);
+
+    const built = await buildAiQuiz(moduleName, topicName, docsWithText, questionCount, difficultyPlan);
 
     const quiz = await createTopicQuiz(
       user.id,
@@ -2338,6 +2539,7 @@ async function apiHandler(req, res, parsedUrl) {
         title: built.title,
         questions: built.questions,
         sourceDocumentIds: docsWithText.map((doc) => doc.id),
+        difficultyPlan: built.difficultyPlan || difficultyPlan,
       },
       data,
     );
@@ -2352,6 +2554,7 @@ async function apiHandler(req, res, parsedUrl) {
       generator: built.generator,
       sourceDocumentCount: docsWithText.length,
       aiEnabled: Boolean(OPENAI_API_KEY),
+      difficultyPlan: built.difficultyPlan || difficultyPlan,
     });
   }
 
@@ -2366,6 +2569,46 @@ async function apiHandler(req, res, parsedUrl) {
     if (!quiz) return send(res, 404, { error: 'Quiz not found' });
 
     const evaluated = evaluateQuiz(quiz, answers);
+    const percent = evaluated.total ? Math.round((evaluated.score / evaluated.total) * 100) : 0;
+
+    const relatedAttempts = data.quizAttempts
+      .filter((x) => x.moduleName === quiz.moduleName && x.topicName === quiz.topicName)
+      .slice(-5);
+    const inferredPreScore = relatedAttempts.length
+      ? relatedAttempts.reduce((sum, item) => sum + Number(item.postScore || 0), 0) / relatedAttempts.length
+      : masteryToPercent(topicState(moduleState(data, quiz.moduleName), quiz.topicName).mastery);
+
+    const masteryResult = applyMasteryUpdateFromQuiz(
+      data,
+      quiz.moduleName,
+      quiz.topicName,
+      inferredPreScore,
+      percent,
+      {
+        source: 'topic_quiz_submit',
+        confidence: 4,
+        aiUsed: Boolean(OPENAI_API_KEY),
+      },
+    );
+
+    data.quizAttempts.push({
+      id: randomId('quiz'),
+      moduleName: quiz.moduleName,
+      topicName: quiz.topicName,
+      preScore: masteryResult.boundedPre,
+      postScore: masteryResult.boundedPost,
+      confidence: masteryResult.boundedConfidence,
+      aiUsed: masteryResult.aiUsed,
+      submittedAt: nowIso(),
+      difficultySuggestion: masteryResult.difficultyPlan.difficulty,
+      nextQuizType: masteryResult.newMasteryPct < 65 ? 'targeted-remediation' : 'spaced-repetition',
+      targetMasteryPct: masteryResult.difficultyPlan.targetMasteryPct,
+      targetPostScore: masteryResult.difficultyPlan.targetPostScore,
+      gainPct: masteryResult.gainPct,
+      decayRatePct: masteryResult.decayRatePct,
+    });
+
+    recomputeModuleScores(data, quiz.moduleName);
 
     const attempt = await saveQuizAttempt(
       user.id,
@@ -2381,9 +2624,7 @@ async function apiHandler(req, res, parsedUrl) {
       data,
     );
 
-    if (!SUPABASE_ENABLED) {
-      await saveDataForUser(user.id, data);
-    }
+    await saveDataForUser(user.id, data);
 
     return send(res, 200, {
       ok: true,
@@ -2392,10 +2633,21 @@ async function apiHandler(req, res, parsedUrl) {
         quizId,
         score: evaluated.score,
         total: evaluated.total,
-        percent: evaluated.total ? Math.round((evaluated.score / evaluated.total) * 100) : 0,
+        percent,
         submittedAt: attempt.submittedAt,
       },
       review: evaluated.results,
+      masteryUpdate: {
+        oldMastery: masteryResult.oldMastery,
+        newMastery: masteryResult.newMastery,
+        oldMasteryPct: masteryResult.oldMasteryPct,
+        newMasteryPct: masteryResult.newMasteryPct,
+        gain: masteryResult.gain,
+        gainPct: masteryResult.gainPct,
+        decay: masteryResult.decay,
+        decayRatePct: masteryResult.decayRatePct,
+        difficultyPlan: masteryResult.difficultyPlan,
+      },
     });
   }
 
@@ -2425,40 +2677,34 @@ async function apiHandler(req, res, parsedUrl) {
     const boundedConfidence = 3;
     const aiUsed = false;
 
-    const mod = moduleState(data, moduleName);
-    const topic = topicState(mod, topicName);
-    const now = nowIso();
-    const decay = retentionDecay(topic, now);
-    const gain = learningGain(boundedPre, boundedPost);
-
-    const oldMastery = topic.mastery;
-    topic.mastery = clamp(oldMastery + gain * 2.5 - decay, 1, 10);
-    topic.lastInteractionAt = now;
-    topic.lastQuizAt = now;
-    topic.history.push({
-      at: now,
-      oldMastery,
-      newMastery: topic.mastery,
-      preScore: boundedPre,
-      postScore: boundedPost,
-      confidence: boundedConfidence,
-      aiUsed,
-      decay,
-      gain,
-    });
-    topic.nextReviewAt = new Date(new Date(now).getTime() + reviewDays(topic.mastery) * 86400000).toISOString();
+    const masteryResult = applyMasteryUpdateFromQuiz(
+      data,
+      moduleName,
+      topicName,
+      boundedPre,
+      boundedPost,
+      {
+        confidence: boundedConfidence,
+        aiUsed,
+        source: 'quiz_submit',
+      },
+    );
 
     const attempt = {
       id: randomId('quiz'),
       moduleName,
       topicName,
-      preScore: boundedPre,
-      postScore: boundedPost,
+      preScore: masteryResult.boundedPre,
+      postScore: masteryResult.boundedPost,
       confidence: boundedConfidence,
       aiUsed: Boolean(aiUsed),
-      submittedAt: now,
-      difficultySuggestion: oldMastery < 4 ? 'easy' : oldMastery < 7 ? 'medium' : 'hard',
-      nextQuizType: topic.mastery < 5 ? 'targeted-remediation' : 'spaced-repetition',
+      submittedAt: nowIso(),
+      difficultySuggestion: masteryResult.difficultyPlan.difficulty,
+      targetMasteryPct: masteryResult.difficultyPlan.targetMasteryPct,
+      targetPostScore: masteryResult.difficultyPlan.targetPostScore,
+      nextQuizType: masteryResult.newMasteryPct < 65 ? 'targeted-remediation' : 'spaced-repetition',
+      gainPct: masteryResult.gainPct,
+      decayRatePct: masteryResult.decayRatePct,
     };
 
     data.quizAttempts.push(attempt);
@@ -2469,10 +2715,15 @@ async function apiHandler(req, res, parsedUrl) {
       ok: true,
       attempt,
       masteryUpdate: {
-        oldMastery,
-        newMastery: topic.mastery,
-        gain,
-        decay,
+        oldMastery: masteryResult.oldMastery,
+        newMastery: masteryResult.newMastery,
+        oldMasteryPct: masteryResult.oldMasteryPct,
+        newMasteryPct: masteryResult.newMasteryPct,
+        gain: masteryResult.gain,
+        gainPct: masteryResult.gainPct,
+        decay: masteryResult.decay,
+        decayRatePct: masteryResult.decayRatePct,
+        difficultyPlan: masteryResult.difficultyPlan,
       },
     });
   }
@@ -2545,7 +2796,7 @@ async function apiHandler(req, res, parsedUrl) {
     topic.documents = Array.isArray(topic.documents) ? topic.documents.concat(docs) : docs;
     topic.lastInteractionAt = uploadedAt;
     recomputeModuleScores(data, moduleName);
-    saveData(data);
+    await saveDataForUser(user.id, data);
     return send(res, 200, { ok: true, documents: docs });
   }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { User, Brain, Edit2, Save } from "lucide-react";
+import { User, Edit2, Save } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 
 export default function Profile() {
@@ -156,8 +156,8 @@ export default function Profile() {
 
         <div className="bg-card border border-border rounded-lg p-6" id="study-techniques">
           <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Brain className="w-7 h-7 text-primary" />
+            <div className="w-12 h-12 rounded-xl overflow-hidden border border-border bg-primary/10">
+              <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h3 className="font-medium text-foreground text-lg">Learning Style & Study Persona</h3>

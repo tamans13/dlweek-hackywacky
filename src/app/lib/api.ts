@@ -31,6 +31,18 @@ export interface TopicState {
     aiUsed: boolean;
     decay: number;
     gain: number;
+    oldMasteryPct?: number;
+    newMasteryPct?: number;
+    gainPct?: number;
+    decayRatePct?: number;
+    source?: string;
+    difficultyTarget?: {
+      currentMasteryPct: number;
+      targetMasteryPct: number;
+      targetPostScore: number;
+      requiredGainPct: number;
+      difficulty: string;
+    };
   }>;
 }
 
@@ -60,6 +72,10 @@ export interface QuizAttempt {
   submittedAt: string;
   difficultySuggestion: string;
   nextQuizType: string;
+  targetMasteryPct?: number;
+  targetPostScore?: number;
+  gainPct?: number;
+  decayRatePct?: number;
 }
 
 export interface TabEvent {
@@ -166,6 +182,13 @@ export interface GeneratedQuiz {
   attempts: GeneratedQuizAttemptSummary[];
   attemptCount: number;
   lastAttempt: GeneratedQuizAttemptSummary | null;
+  difficultyPlan?: {
+    currentMasteryPct: number;
+    targetMasteryPct: number;
+    targetPostScore: number;
+    requiredGainPct: number;
+    difficulty: string;
+  } | null;
 }
 
 export interface GeneratedQuizReviewItem {
@@ -255,7 +278,7 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
   return data as T;
 }
 
-export async function loginOrSignup(email: string, password: string) {
+export async function login(email: string, password: string) {
   const result = await request<{
     ok: true;
     user: AuthUser;
@@ -268,6 +291,37 @@ export async function loginOrSignup(email: string, password: string) {
     supabaseEnabled: boolean;
   }>(
     "/api/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    },
+    { auth: false },
+  );
+
+  saveAuthSession({
+    accessToken: result.session.accessToken,
+    refreshToken: result.session.refreshToken,
+    expiresIn: result.session.expiresIn,
+    tokenType: result.session.tokenType,
+    createdAt: Date.now(),
+  });
+
+  return result;
+}
+
+export async function signup(email: string, password: string) {
+  const result = await request<{
+    ok: true;
+    user: AuthUser;
+    session: {
+      accessToken: string;
+      refreshToken: string;
+      expiresIn: number;
+      tokenType: string;
+    };
+    supabaseEnabled: boolean;
+  }>(
+    "/api/auth/signup",
     {
       method: "POST",
       body: JSON.stringify({ email, password }),
@@ -369,6 +423,7 @@ export function uploadTopicFiles(payload: {
   return request<{
     ok: true;
     uploaded: Array<{ id: string; fileName: string; mimeType: string; uploadedAt: string }>;
+    skipped?: string[];
     documents: TopicDocument[];
   }>("/api/topic/files/upload", {
     method: "POST",
@@ -392,6 +447,7 @@ export function generateTopicQuiz(payload: {
     generator: string;
     sourceDocumentCount: number;
     aiEnabled: boolean;
+    difficultyPlan?: GeneratedQuiz["difficultyPlan"];
   }>("/api/topic/quiz/generate", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -411,6 +467,23 @@ export function submitTopicQuiz(payload: {
     ok: true;
     attempt: GeneratedQuizAttemptSummary & { percent: number };
     review: GeneratedQuizReviewItem[];
+    masteryUpdate?: {
+      oldMastery: number;
+      newMastery: number;
+      oldMasteryPct: number;
+      newMasteryPct: number;
+      gain: number;
+      gainPct: number;
+      decay: number;
+      decayRatePct: number;
+      difficultyPlan: {
+        currentMasteryPct: number;
+        targetMasteryPct: number;
+        targetPostScore: number;
+        requiredGainPct: number;
+        difficulty: string;
+      };
+    };
   }>("/api/topic/quiz/submit", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -433,6 +506,17 @@ export function submitQuiz(payload: {
       newMastery: number;
       gain: number;
       decay: number;
+      oldMasteryPct?: number;
+      newMasteryPct?: number;
+      gainPct?: number;
+      decayRatePct?: number;
+      difficultyPlan?: {
+        currentMasteryPct: number;
+        targetMasteryPct: number;
+        targetPostScore: number;
+        requiredGainPct: number;
+        difficulty: string;
+      };
     };
   }>("/api/quiz/submit", {
     method: "POST",
