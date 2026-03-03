@@ -11,6 +11,8 @@ export interface TopicState {
   topicName: string;
   mastery: number;
   estimatedMasteryNow?: number;
+  decayPerDay?: number;
+  lastReviewedAt?: string;
   documents?: Array<{
     id: string;
     name: string;
@@ -114,6 +116,12 @@ export interface BackendState {
   tabEvents: TabEvent[];
   quizAttempts: QuizAttempt[];
   examPlans: Record<string, ExamPlan>;
+  burnoutTrend?: Array<{
+    at: string;
+    date: string;
+    score: number;
+    moduleCount: number;
+  }>;
   onboardingPersona?: OnboardingPersonaAnalysis | null;
   personaProfile?: PersonaProfile | null;
   createdAt: string;

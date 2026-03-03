@@ -14,7 +14,7 @@ import {
   Play,
   Square,
 } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { Button } from "../components/ui/button";
@@ -30,6 +30,26 @@ import {
 
 function toPct(value: number) {
   return Math.round((value / 10) * 100);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function addDays(base: Date, days: number) {
+  const next = new Date(base);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfDay(date: Date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function dateLabel(date: Date) {
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatDuration(seconds: number) {
@@ -120,6 +140,102 @@ export default function TopicDetail() {
         };
       });
   }, [state, moduleName, topicName]);
+
+  const masteryProjection = useMemo(() => {
+    if (!topic) return [];
+
+    const rawCurrent = Number(topic.estimatedMasteryNow ?? topic.mastery ?? 0);
+    const currentMasteryPct = rawCurrent <= 10 ? rawCurrent * 10 : rawCurrent;
+    
+    // Ebbinghaus exponential decay model parameters
+    const initialLambda = 0.12; // Initial decay rate per day (λ in M(t) = M₀ * e^(-λt))
+    const maxMasteryAfterReview = 95; // Realistic jump on review day
+    const consolidationFactor = 0.92; // Each review reduces decay by 8% (stronger retention)
+    const minLambda = 0.04; // Floor to prevent infinite consolidation
+    const horizonDays = 30;
+
+    const today = startOfDay(new Date());
+    const rows: Array<{
+      date: string;
+      noReview: number;
+      withSpacedReview: number;
+    }> = [];
+
+    // Track review events for spaced repetition curve
+    interface ReviewEvent {
+      day: number;
+      masteryAfterReview: number;
+      lambda: number; // Decay rate applies from this review forward
+    }
+    
+    const reviewEvents: ReviewEvent[] = [];
+    let currentLambda = initialLambda;
+
+    // Schedule reviews with increasing intervals (progressive spacing)
+    // This ensures mastery > 75% by day 21 and maintains smooth consolidation
+    const shouldReviewOnDay = (day: number): boolean => {
+      if (day === 0) return true; // Review on day 0 (baseline)
+      if (day <= 7) return day % 2 === 0; // Days 0-7: every 2 days
+      if (day <= 14) return day % 3 === 0; // Days 8-14: every 3 days
+      if (day <= 21) return day % 4 === 0; // Days 15-21: every 4 days
+      return day % 5 === 0; // Days 22+: every 5 days
+    };
+
+    // Calculate mastery at a specific day using last review's exponential decay
+    // M(t) = M₀ * e^(-λ * Δt)
+    const calculateMasteryWithReview = (day: number): number => {
+      if (reviewEvents.length === 0) {
+        // Before first review: pure exponential decay
+        return clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
+      }
+
+      // Find the most recent review before/at this day
+      const lastReview = reviewEvents
+        .filter(r => r.day <= day)
+        .sort((a, b) => b.day - a.day)[0];
+
+      if (!lastReview) {
+        return clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
+      }
+
+      const daysSinceReview = day - lastReview.day;
+      // Smooth exponential decay from last review
+      return clamp(lastReview.masteryAfterReview * Math.exp(-lastReview.lambda * daysSinceReview), 0, 100);
+    };
+
+    // Generate projection
+    for (let day = 0; day <= horizonDays; day += 1) {
+      const at = addDays(today, day);
+
+      // NO REVIEW scenario: pure exponential forgetting curve
+      const masteryNoReview = clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
+
+      // WITH REVIEW scenario: apply spaced repetition with smooth exponential decay
+      if (shouldReviewOnDay(day)) {
+        // Record review: mastery jumps to ~95%, and we store the current decay rate
+        reviewEvents.push({
+          day: day,
+          masteryAfterReview: maxMasteryAfterReview,
+          lambda: currentLambda,
+        });
+
+        // Reduce lambda for future reviews (memory consolidation effect)
+        // Each review makes the memory representation stronger, slowing decay
+        currentLambda *= consolidationFactor;
+        currentLambda = Math.max(currentLambda, minLambda);
+      }
+
+      const masteryWithReview = calculateMasteryWithReview(day);
+
+      rows.push({
+        date: dateLabel(at),
+        noReview: Math.round(masteryNoReview),
+        withSpacedReview: Math.round(masteryWithReview),
+      });
+    }
+
+    return rows;
+  }, [topic, attempts, moduleState]);
 
   const activeSession = useMemo(() => {
     if (!state) return null;
@@ -578,6 +694,33 @@ export default function TopicDetail() {
           </div>
 
           <div className="bg-card border border-border rounded-lg p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Calendar className="w-5 h-5 text-primary" />
+              <h3 className="font-medium text-foreground text-lg">1-Month Predicted Mastery</h3>
+            </div>
+            <div className="text-xs text-muted-foreground mb-3">
+              Projection compares natural decay vs doing spaced repetition on assigned review days.
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={masteryProjection}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                <XAxis dataKey="date" tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} />
+                <YAxis tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} domain={[0, 100]} />
+                <Legend />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "var(--color-card)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "0.5rem",
+                  }}
+                />
+                <Line type="monotone" dataKey="noReview" name="No Review" stroke="#DC2626" strokeDasharray="6 4" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="withSpacedReview" name="With Spaced Review" stroke="#2563EB" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="bg-card border border-border rounded-lg p-5 md:col-span-2">
             <div className="flex items-center gap-2 mb-4">
               <AlertCircle className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground text-lg">Specific Weaknesses</h3>

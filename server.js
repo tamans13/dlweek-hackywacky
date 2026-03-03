@@ -205,6 +205,7 @@ function emptyState() {
     generatedQuizAttempts: [],
     spacedRetryQueue: [],
     spacedReviewRuns: [],
+    burnoutTrend: [],
     chatSessions: [],
     dinoSignals: {
       lastBehaviorByModule: {},
@@ -245,6 +246,7 @@ function normalizeData(data) {
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
     spacedRetryQueue: Array.isArray(base.spacedRetryQueue) ? base.spacedRetryQueue : [],
     spacedReviewRuns: Array.isArray(base.spacedReviewRuns) ? base.spacedReviewRuns : [],
+    burnoutTrend: Array.isArray(base.burnoutTrend) ? base.burnoutTrend : [],
     chatSessions: Array.isArray(base.chatSessions) ? base.chatSessions : [],
     dinoSignals: base.dinoSignals && typeof base.dinoSignals === 'object'
       ? {
@@ -262,7 +264,58 @@ function normalizeData(data) {
     moduleState(state, moduleName);
   }
 
+  state.burnoutTrend = state.burnoutTrend
+    .map((point) => {
+      const atRaw = String(point?.at || '').trim();
+      const atMs = new Date(atRaw).getTime();
+      if (!Number.isFinite(atMs)) return null;
+      const score = clamp(Number(point?.score || 0), 0, 100);
+      const moduleCount = Math.max(0, Number(point?.moduleCount || 0));
+      return {
+        at: new Date(atMs).toISOString(),
+        date: String(point?.date || new Date(atMs).toISOString().slice(0, 10)),
+        score: Math.round(score),
+        moduleCount,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+    .slice(-365);
+
   return state;
+}
+
+function averageBurnoutAcrossModules(data) {
+  const values = Object.values(data.modules || {})
+    .map((mod) => Number(mod?.burnoutRisk || 0))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return 0;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function upsertBurnoutTrendPoint(data, atIso = nowIso()) {
+  if (!Array.isArray(data.burnoutTrend)) data.burnoutTrend = [];
+  const atMs = new Date(atIso).getTime();
+  const at = Number.isFinite(atMs) ? new Date(atMs).toISOString() : nowIso();
+  const date = at.slice(0, 10);
+  const moduleCount = Object.keys(data.modules || {}).length;
+  const score = averageBurnoutAcrossModules(data);
+  const point = {
+    at,
+    date,
+    score,
+    moduleCount,
+  };
+  const idx = data.burnoutTrend.findIndex((item) => String(item?.date || '') === date);
+  if (idx >= 0) {
+    data.burnoutTrend[idx] = point;
+  } else {
+    data.burnoutTrend.push(point);
+  }
+  data.burnoutTrend = data.burnoutTrend
+    .filter((item) => item && item.at && item.date)
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+    .slice(-365);
 }
 
 function ensureLocalDataFile() {
@@ -1261,6 +1314,7 @@ function recomputeModuleScores(data, moduleName) {
   mod.masteryPercent = topicCount ? Math.round(masterySumPct / topicCount) : 0;
 
   mod.updatedAt = now;
+  upsertBurnoutTrendPoint(data, now);
 }
 
 function readinessScore(moduleName, data) {
