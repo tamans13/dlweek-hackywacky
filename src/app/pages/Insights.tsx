@@ -57,10 +57,34 @@ export default function Insights() {
 
   const burnoutTrendData = useMemo(() => {
     if (!state) return [];
+    const trend = Array.isArray(state.burnoutTrend) ? state.burnoutTrend : [];
+    const points = trend
+      .map((item) => {
+        const atMs = new Date(item.at).getTime();
+        if (!Number.isFinite(atMs)) return null;
+        const date = new Date(atMs);
+        const label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        return {
+          period: label,
+          score: Math.round(Number(item.score || 0)),
+          at: item.at,
+        };
+      })
+      .filter((item): item is { period: string; score: number; at: string } => Boolean(item))
+      .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+      .slice(-30);
+
+    if (points.length) return points;
+
     const risks = Object.values(state.modules).map((module) => Number(module.burnoutRisk || 0));
     if (!risks.length) return [];
     const averageRisk = Math.round(risks.reduce((sum, value) => sum + value, 0) / risks.length);
-    return [{ period: "All Modules", score: averageRisk }];
+    const today = new Date();
+    return [{
+      period: today.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      score: averageRisk,
+      at: today.toISOString(),
+    }];
   }, [state]);
 
   const focusScore = useMemo(() => {
@@ -71,11 +95,12 @@ export default function Insights() {
   }, [state]);
 
   const burnoutScore = useMemo(() => {
+    if (burnoutTrendData.length) return burnoutTrendData[burnoutTrendData.length - 1].score;
     if (!state) return 0;
     const values = Object.values(state.modules).map((x) => x.burnoutRisk || 0);
     if (!values.length) return 0;
     return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
-  }, [state]);
+  }, [state, burnoutTrendData]);
 
   const peakRange = useMemo(() => {
     if (!accuracyByTimeData.length) return "No data";
