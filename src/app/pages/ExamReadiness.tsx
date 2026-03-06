@@ -1,12 +1,14 @@
 import { useMemo } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Calendar, CheckCircle2 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
+import { EmptyState } from "../components/EmptyState";
 import { daysUntil, formatDate } from "../lib/format";
 import { toSlug } from "../lib/ids";
 
 export default function ExamReadiness() {
   const { state, readiness, loading, error } = useAppData();
+  const navigate = useNavigate();
   const moduleNames = state ? state.profile.modules : [];
 
   const readinessByModule = useMemo(() => {
@@ -87,23 +89,33 @@ export default function ExamReadiness() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-5">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <div className="bg-card border border-border rounded-lg p-4 space-y-2 md:col-span-2">
-            <h3 className="font-medium text-foreground">Add Upcoming Exams</h3>
-            <p className="text-sm text-muted-foreground">
-              To add an exam or midterm, go to the{" "}
-              <Link to="/dashboard/modules" className="font-medium text-primary hover:underline">
-                Module tab
-              </Link>{" "}
-              and select your module.
-            </p>
-          </div>
+        {!moduleNames.length ? (
+          <EmptyState
+            illustration="chart"
+            title="No exam readiness data yet"
+            description="Complete quizzes or study sessions so Brainosaur can estimate your readiness."
+            primaryActionLabel="Start Studying"
+            onPrimaryAction={() => navigate("/dashboard/modules")}
+          />
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div className="bg-card border border-border rounded-lg p-4 space-y-2 md:col-span-2">
+                <h3 className="font-medium text-foreground">Add Upcoming Exams</h3>
+                <p className="text-sm text-muted-foreground">
+                  To add an exam or midterm, go to the{" "}
+                  <Link to="/dashboard/modules" className="font-medium text-primary hover:underline">
+                    Module tab
+                  </Link>{" "}
+                  and select your module.
+                </p>
+              </div>
 
-          <div className="rounded-lg p-4 bg-primary text-primary-foreground">
-            <div className="text-sm text-primary-foreground/80">Days Until Next Exam</div>
-            <div className="mt-1 text-3xl font-medium">{nextExamDays ?? "-"}</div>
-          </div>
-        </div>
+              <div className="rounded-lg p-4 bg-primary text-primary-foreground">
+                <div className="text-sm text-primary-foreground/80">Days Until Next Exam</div>
+                <div className="mt-1 text-3xl font-medium">{nextExamDays ?? "-"}</div>
+              </div>
+            </div>
 
         {readinessByModule.map((exam) => {
           const sortedTopics = [...exam.topicsTested].sort((a, b) => {
@@ -183,7 +195,8 @@ export default function ExamReadiness() {
             </Link>
           );
         })}
-
+          </>
+        )}
       </div>
     </div>
   );

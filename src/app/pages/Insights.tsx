@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Clock, AlertTriangle, Info, ArrowRight } from "lucide-react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useAppData } from "../state/AppDataContext";
+import { EmptyState } from "../components/EmptyState";
 
 export default function Insights() {
   const { state, loading, error, runInsights } = useAppData();
+  const navigate = useNavigate();
   const [insightSummary, setInsightSummary] = useState("");
   const [insightActions, setInsightActions] = useState<string[]>([]);
   const [insightLoading, setInsightLoading] = useState(false);
@@ -132,6 +134,30 @@ export default function Insights() {
 
   if (error) {
     return <div className="p-8 text-destructive">{error}</div>;
+  }
+
+  const hasData = state && (state.quizAttempts.length > 0 || state.studySessions.length > 0);
+
+  if (!hasData) {
+    return (
+      <div className="min-h-screen">
+        <div className="border-b border-border bg-card">
+          <div className="max-w-6xl mx-auto px-6 py-5">
+            <h1 className="text-2xl font-medium text-foreground">Learning Insights</h1>
+            <p className="text-muted-foreground mt-0.5">Analytics on your study patterns and performance</p>
+          </div>
+        </div>
+        <div className="max-w-6xl mx-auto px-6 py-6">
+          <EmptyState
+            illustration="brain"
+            title="No insights available yet"
+            description="Study a bit more and Brainosaur will start generating insights about your strengths and weaknesses."
+            primaryActionLabel="Go to Modules"
+            onPrimaryAction={() => navigate("/dashboard/modules")}
+          />
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { Plus, Calendar, TrendingUp } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { EmptyState } from "../components/EmptyState";
 import { useAppData } from "../state/AppDataContext";
 import { daysUntil, formatDate } from "../lib/format";
 import { toSlug } from "../lib/ids";
@@ -63,9 +64,13 @@ export default function Modules() {
 
       <div className="max-w-6xl mx-auto px-6 py-6">
         {!moduleCards.length ? (
-          <div className="bg-card border border-border rounded-lg p-8 text-center text-muted-foreground">
-            No modules yet. Add your first module to start tracking.
-          </div>
+          <EmptyState
+            illustration="book"
+            title="No modules yet"
+            description="Add your first module to start tracking mastery and study progress."
+            primaryActionLabel="Add Module"
+            onPrimaryAction={handleAddModule}
+          />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {moduleCards.map((module) => (
