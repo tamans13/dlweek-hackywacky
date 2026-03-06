@@ -1482,9 +1482,12 @@ const ONBOARDING_QUESTION_LABELS = {
   'after-2hr': 'After a 2-hour study session, you usually feel',
   'study-method': 'When you study, you mostly',
   'performance-drop': 'When performance drops during a session, you',
-  'phone-check': 'How often do you check your phone?',
+  'phone-check': 'How often do you switch tasks or tabs while studying?',
   'study-hours-trend': 'In the past 2 weeks, study hours',
   'performance-trend': 'In the past 2 weeks, performance',
+  'procrastination-cause': 'When you delay studying, it is usually because',
+  'learning-style-understanding': 'When you try to understand something difficult, what helps most?',
+  'learning-style-revision': 'When revising for a test, you usually prefer to:',
   guilt: 'You feel guilty when not studying',
   'mental-tired': 'You feel mentally tired before studying',
 };
@@ -1496,6 +1499,14 @@ function normalizeOnboardingPayload(raw) {
   const normalizedAnswers = Object.fromEntries(
     Object.entries(answers).map(([k, v]) => [String(k), String(v)]),
   );
+  const normalizedBrainotype = prefs.brainotype && typeof prefs.brainotype === 'object'
+    ? {
+        primary: String(prefs.brainotype.primary || ''),
+        secondary: String(prefs.brainotype.secondary || ''),
+        learningStyle: String(prefs.brainotype.learningStyle || ''),
+        scores: typeof prefs.brainotype.scores === 'object' ? prefs.brainotype.scores : {},
+      }
+    : null;
   return {
     profile: {
       university: String(welcome.university || ''),
@@ -1511,6 +1522,7 @@ function normalizeOnboardingPayload(raw) {
         question: ONBOARDING_QUESTION_LABELS[key] || key,
         answer: value,
       })),
+      brainotype: normalizedBrainotype,
     },
   };
 }
@@ -1615,13 +1627,27 @@ async function buildOnboardingPersonaWithOpenAI(payload) {
   if (!OPENAI_API_KEY) return buildOnboardingPersonaHeuristic(payload);
 
   try {
+    const humanizedAnswers = payload.preferences.answersHumanized || [];
     const prompt = [
-      'You are an educational coach. Return strict JSON only.',
+      'You are generating personalised study insights.',
+      'The user has been classified as:',
+      `Brainosaur type: ${payload.preferences.brainotype?.primary || 'Unknown'}`,
+      `Learning style: ${payload.preferences.brainotype?.learningStyle || 'Unknown'}`,
+      'Based on their questionnaire answers, generate personalised feedback.',
+      'Explain:',
+      '1. Their likely study behaviour patterns',
+      '2. Strengths of this learning style',
+      '3. Common challenges for this brainosaur type',
+      '4. Specific study suggestions tailored to both their dinosaur type and learning style',
+      'Keep the tone encouraging and practical.',
+      'Use short sections and bullet points.',
+      'Questionnaire answers:',
+      JSON.stringify(humanizedAnswers, null, 2),
       'Required JSON shape: { "learningStyle": string, "rationale": string, "studyTechniques": [{ "title": string, "description": string }] }',
       'Return exactly 4 to 5 studyTechniques.',
       'Techniques must be specific, actionable, and directly grounded in the questionnaire.',
       'Avoid generic advice.',
-      JSON.stringify(payload),
+      JSON.stringify(payload, null, 2),
     ].join('\n');
 
     const response = await fetch('https://api.openai.com/v1/responses', {

@@ -5,6 +5,7 @@ import { CheckCircle2 } from "lucide-react";
 import { useAppData } from "../../state/AppDataContext";
 import { generateOnboardingPersona } from "../../lib/api";
 import type { OnboardingPersonaAnalysis } from "../../lib/api";
+import { storeOnboardingPersona } from "../../lib/onboardingPersona";
 
 const fallbackAnalysis: OnboardingPersonaAnalysis = {
   learningStyle: "Balanced Adaptive Learner",
@@ -65,7 +66,7 @@ export default function OnboardingComplete() {
 
         setAnalysis(result.analysis);
         setAiEnabled(result.aiEnabled);
-        sessionStorage.setItem("onboarding_persona", JSON.stringify(result.analysis));
+        storeOnboardingPersona(result.analysis);
       } catch (err) {
         if (cancelled) return;
         setAnalysis(fallbackAnalysis);
