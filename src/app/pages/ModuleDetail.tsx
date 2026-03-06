@@ -458,21 +458,6 @@ export default function ModuleDetail() {
                       <div className="h-full bg-primary transition-all" style={{ width: `${topic.masteryPct}%` }} />
                     </div>
                   </div>
-
-                  <div>
-                    <div className="flex items-center justify-between text-sm mb-1">
-                      <span className="text-muted-foreground">Retention</span>
-                      <span className={`font-medium ${topic.retentionPct < 50 ? "text-destructive" : topic.retentionPct < 80 ? "text-warning" : "text-success"}`}>
-                        {topic.retentionPct}%
-                      </span>
-                    </div>
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all ${topic.retentionPct >= 80 ? "bg-success" : topic.retentionPct >= 50 ? "bg-warning" : "bg-destructive"}`}
-                        style={{ width: `${topic.retentionPct}%` }}
-                      />
-                    </div>
-                  </div>
                 </div>
 
                 <div className="flex gap-2 mt-4">
