@@ -504,8 +504,6 @@ export default function TopicDetail() {
 
   const masteryNow = attempts.length ? (topic.estimatedMasteryNow ?? topic.mastery) : 0;
   const masteryPct = toPct(masteryNow);
-  const retentionDecay = attempts.length ? Math.max(0, Math.round((topic.mastery - masteryNow) * 10)) : 0;
-  const risk = retentionDecay > 30 ? "high" : retentionDecay > 12 ? "medium" : "low";
   const pendingGeneratedQuiz = quizzes.find((quiz) => quiz.attemptCount === 0) || null;
   const completedGeneratedQuizCount = quizzes.filter((quiz) => quiz.attemptCount > 0).length;
   const nextQuizDifficulty = nextDifficultyFromCompletedCount(completedGeneratedQuizCount);
@@ -528,15 +526,6 @@ export default function TopicDetail() {
               <span className="text-sm text-muted-foreground">Mastery:</span>
               <span className="text-lg font-medium text-foreground">{masteryPct}%</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Decay:</span>
-              <span className={`text-lg font-medium ${risk === "high" ? "text-destructive" : risk === "medium" ? "text-warning" : "text-success"}`}>
-                {retentionDecay}%
-              </span>
-            </div>
-            <span className={`text-xs px-3 py-1.5 rounded ${risk === "high" ? "bg-destructive/10 text-destructive" : risk === "medium" ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
-              {risk === "high" ? "High Risk" : risk === "medium" ? "Medium Risk" : "Low Risk"}
-            </span>
           </div>
         </div>
       </div>
