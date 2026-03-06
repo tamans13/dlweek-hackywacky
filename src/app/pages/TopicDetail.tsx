@@ -151,12 +151,14 @@ export default function TopicDetail() {
     // baseDecayRate controls how quickly an unreviewed memory fades.
     // memoryStrength scales that decay – higher strength = slower forgetting.
     const horizonDays = 30;
-    const baseDecayRate = 0.22; // per-day baseline decay
-    const maxStrength = 4.0;
+    // Slightly slower baseline decay + higher ceiling for memory strength
+    // so that reviews can be spaced further apart while still beating the curve.
+    const baseDecayRate = 0.14; // per-day baseline decay
+    const maxStrength = 5.0;
 
     // Derive an initial memory strength and review count from quiz history.
     const reviewCount = attempts.length;
-    const baseMemoryStrength = clamp(1 + reviewCount * 0.25, 1, maxStrength);
+    const baseMemoryStrength = clamp(1.4 + reviewCount * 0.35, 1.4, maxStrength);
 
     const applyForgetting = (
       mastery: number,
@@ -229,8 +231,12 @@ export default function TopicDetail() {
           1,
         );
 
-        const canReviewToday = day - lastReviewDay >= 1;
-        const needsReviewToBeatThreshold = predictedTomorrow < 75;
+        // Enforce slightly larger gaps between reviews and allow a small buffer
+        // under 75 before triggering another review. This yields fewer, more
+        // meaningful repetitions while still keeping the curve above target.
+        const minSpacingDays = 2;
+        const canReviewToday = day - lastReviewDay >= minSpacingDays;
+        const needsReviewToBeatThreshold = predictedTomorrow < 72;
 
         if (canReviewToday && needsReviewToBeatThreshold) {
           // --- Review update rules (single review per day, min spacing 1 day) ---
