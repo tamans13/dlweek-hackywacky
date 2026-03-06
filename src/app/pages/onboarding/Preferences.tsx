@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { calculateBrainotype, storeBrainotypeResult } from "../../lib/brainotype-scoring";
 
 const questions = [
   {
@@ -60,7 +61,7 @@ const questions = [
   },
   {
     id: "phone-check",
-    question: "How often do you check your phone during study?",
+    question: "How often do you switch tasks or tabs while studying?",
     options: [
       { value: "never", label: "Never" },
       { value: "occasionally", label: "Occasionally (every 1–2 hours)" },
@@ -88,6 +89,34 @@ const questions = [
       { value: "dropped", label: "Dropped significantly" },
     ],
   },
+  {
+    id: "procrastination-cause",
+    question: "When you delay studying, it is usually because:",
+    options: [
+      { value: "too-big", label: "The task feels too big" },
+      { value: "tired", label: "I am tired" },
+      { value: "distracted", label: "I get distracted easily" },
+      { value: "no-start", label: "I don't know where to start" },
+    ],
+  },
+  {
+    id: "learning-style-understanding",
+    question: "When you try to understand something difficult, what helps most?",
+    options: [
+      { value: "visual", label: "Seeing diagrams, charts, or written explanations" },
+      { value: "auditory", label: "Hearing someone explain it or discussing it" },
+      { value: "kinesthetic", label: "Trying it yourself or working through examples" },
+    ],
+  },
+  {
+    id: "learning-style-revision",
+    question: "When revising for a test, you usually prefer to:",
+    options: [
+      { value: "visual", label: "Use mind maps, notes, or visual summaries" },
+      { value: "auditory", label: "Explain concepts out loud or listen to explanations" },
+      { value: "kinesthetic", label: "Practice problems or physically work through steps" },
+    ],
+  },
 ];
 
 const ratingQuestions = [
@@ -95,7 +124,7 @@ const ratingQuestions = [
   { id: "mental-tired", question: "You feel mentally tired even before starting study." },
 ];
 
-const multiSelectQuestionIds = new Set(["study-method", "performance-drop", "phone-check"]);
+const multiSelectQuestionIds = new Set(["performance-drop"]);
 
 export default function OnboardingPreferences() {
   const navigate = useNavigate();
@@ -130,9 +159,16 @@ export default function OnboardingPreferences() {
   };
 
   const handleContinue = () => {
+    const brainotypeResult = calculateBrainotype({ answers, studyLimit, sleep });
+    storeBrainotypeResult(brainotypeResult);
     sessionStorage.setItem(
       "onboarding_preferences",
-      JSON.stringify({ answers, studyLimit, sleep }),
+      JSON.stringify({
+        answers,
+        studyLimit,
+        sleep,
+        brainotype: brainotypeResult,
+      }),
     );
     navigate("/onboarding/complete");
   };

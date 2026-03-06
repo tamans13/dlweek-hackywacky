@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { User, Edit2, Save } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import { getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
+import { brainotypeById } from "../lib/brainotypes";
+import { BrainotypeResult, learningStyleLabels, readBrainotypeResult } from "../lib/brainotype-scoring";
 
 const defaultPersona = {
   learningStyle: "Adaptive Mixed Learner",
@@ -37,9 +39,12 @@ export default function Profile() {
     year: "",
     modules: "",
   });
-  const [persona, setPersona] = useState(defaultPersona.learningStyle);
-  const [personaSummary, setPersonaSummary] = useState(defaultPersona.rationale);
-  const [personaTechniques, setPersonaTechniques] = useState(defaultPersona.studyTechniques);
+  const [brainotypeResult, setBrainotypeResult] = useState<BrainotypeResult | null>(null);
+  const primaryBrainotype = useMemo(() => {
+    if (!brainotypeResult) return null;
+    return brainotypeById[brainotypeResult.primary];
+  }, [brainotypeResult]);
+  const learningStyleLabel = brainotypeResult ? learningStyleLabels[brainotypeResult.learningStyle] : "Not set";
 
   useEffect(() => {
     if (!state) return;
@@ -66,19 +71,6 @@ export default function Profile() {
     if (!state) return;
     const personaData = state.personaProfile || state.onboardingPersona || defaultPersona;
     const learningStyle = String(personaData.learningStyle || defaultPersona.learningStyle).trim();
-    const rationale = String(personaData.rationale || defaultPersona.rationale).trim();
-    const techniques = Array.isArray(personaData.studyTechniques)
-      ? personaData.studyTechniques
-          .map((item) => ({
-            title: String(item?.title || "").trim(),
-            description: String(item?.description || "").trim(),
-          }))
-          .filter((item) => item.title && item.description)
-      : [];
-
-    setPersona(learningStyle || defaultPersona.learningStyle);
-    setPersonaSummary(rationale || defaultPersona.rationale);
-    setPersonaTechniques(techniques.length ? techniques : defaultPersona.studyTechniques);
 
     const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
     window.localStorage.setItem(currentKey, learningStyle || defaultPersona.learningStyle);
@@ -86,6 +78,10 @@ export default function Profile() {
       window.localStorage.setItem(seenKey, learningStyle || defaultPersona.learningStyle);
     }
   }, [state, authUser?.email]);
+
+  useEffect(() => {
+    setBrainotypeResult(readBrainotypeResult());
+  }, []);
 
   const handleSave = async () => {
     if (!state) return;
@@ -182,34 +178,12 @@ export default function Profile() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-6" id="study-techniques">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-xl overflow-hidden border border-border bg-primary/10">
-              <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover" />
-            </div>
-            <div>
-              <h3 className="font-medium text-foreground text-lg">Learning Style & Study Persona</h3>
-              <p className="text-sm text-muted-foreground">AI-generated insights based on your behavior</p>
-            </div>
-          </div>
-
-          <div
-            className={`rounded-lg p-5 mb-6 transition-colors duration-500 ${
-              highlightPersonaCard ? "bg-warning/20 border border-warning/60" : "bg-primary/5 border border-primary/20"
-            }`}
-          >
-            <div className="text-sm text-muted-foreground mb-1">Your Study Persona</div>
-            <div className="text-2xl font-medium text-foreground mb-3">{persona}</div>
-            <p className="text-sm text-muted-foreground leading-relaxed">{personaSummary}</p>
-          </div>
-
-          <div className="space-y-3">
-            {personaTechniques.map((technique) => (
-              <div key={technique.title} className="border border-border rounded-lg p-4">
-                <h5 className="font-medium text-foreground mb-1">{technique.title}</h5>
-                <p className="text-sm text-muted-foreground">{technique.description}</p>
-              </div>
-            ))}
+        <div className="bg-card border border-border rounded-lg p-6">
+          <div className="space-y-2">
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Brainosaur Type</p>
+            <p className="text-lg font-semibold text-foreground">{primaryBrainotype?.name || "Not set"}</p>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Learning Style</p>
+            <p className="text-lg font-semibold text-foreground">{learningStyleLabel}</p>
           </div>
         </div>
       </div>

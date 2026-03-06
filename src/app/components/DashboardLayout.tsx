@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import {
-  LayoutDashboard, 
-  BookOpen, 
-  TrendingUp, 
-  Target, 
+  LayoutDashboard,
+  BookOpen,
+  TrendingUp,
+  Target,
   Settings as SettingsIcon,
   User,
+  Brain,
   LogOut,
 } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
@@ -62,6 +63,7 @@ export default function DashboardLayout() {
     { icon: TrendingUp, label: "Behavioral Insights", path: "/dashboard/insights" },
     { icon: Target, label: "Exam Readiness", path: "/dashboard/exam-readiness" },
     { icon: User, label: "My Profile", path: "/dashboard/profile" },
+    { icon: Brain, label: "Brainosaurs", path: "/dashboard/brainosaurs" },
     { icon: SettingsIcon, label: "Settings", path: "/dashboard/settings" },
   ];
 
