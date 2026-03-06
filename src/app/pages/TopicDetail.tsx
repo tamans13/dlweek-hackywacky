@@ -145,97 +145,119 @@ export default function TopicDetail() {
     if (!topic) return [];
 
     const rawCurrent = Number(topic.estimatedMasteryNow ?? topic.mastery ?? 0);
-    const currentMasteryPct = rawCurrent <= 10 ? rawCurrent * 10 : rawCurrent;
-    
-    // Ebbinghaus exponential decay model parameters
-    const initialLambda = 0.12; // Initial decay rate per day (λ in M(t) = M₀ * e^(-λt))
-    const maxMasteryAfterReview = 95; // Realistic jump on review day
-    const consolidationFactor = 0.92; // Each review reduces decay by 8% (stronger retention)
-    const minLambda = 0.04; // Floor to prevent infinite consolidation
+    const currentMasteryPct = clamp(rawCurrent <= 10 ? rawCurrent * 10 : rawCurrent, 0, 100);
+
+    // --- Forgetting curve parameters (separated from scheduling) ---
+    // baseDecayRate controls how quickly an unreviewed memory fades.
+    // memoryStrength scales that decay – higher strength = slower forgetting.
     const horizonDays = 30;
+    const baseDecayRate = 0.22; // per-day baseline decay
+    const maxStrength = 4.0;
 
-    const today = startOfDay(new Date());
-    const rows: Array<{
-      date: string;
-      noReview: number;
-      withSpacedReview: number;
-    }> = [];
+    // Derive an initial memory strength and review count from quiz history.
+    const reviewCount = attempts.length;
+    const baseMemoryStrength = clamp(1 + reviewCount * 0.25, 1, maxStrength);
 
-    // Track review events for spaced repetition curve
-    interface ReviewEvent {
-      day: number;
-      masteryAfterReview: number;
-      lambda: number; // Decay rate applies from this review forward
+    const applyForgetting = (
+      mastery: number,
+      decayRate: number,
+      memoryStrength: number,
+      days: number,
+    ) => {
+      const effectiveLambda = decayRate / Math.max(0.5, memoryStrength);
+      return clamp(mastery * Math.exp(-effectiveLambda * days), 0, 100);
+    };
+
+    // --- Spaced review scheduling logic (no UI, pure data) ---
+    interface SimulationResult {
+      rows: Array<{
+        date: string;
+        noReview: number;
+        withSpacedReview: number;
+      }>;
+      reviewDays: number[];
+      totalReviews: number;
     }
-    
-    const reviewEvents: ReviewEvent[] = [];
-    let currentLambda = initialLambda;
 
-    // Schedule reviews with increasing intervals (progressive spacing)
-    // This ensures mastery > 75% by day 21 and maintains smooth consolidation
-    const shouldReviewOnDay = (day: number): boolean => {
-      if (day === 0) return true; // Review on day 0 (baseline)
-      if (day <= 7) return day % 2 === 0; // Days 0-7: every 2 days
-      if (day <= 14) return day % 3 === 0; // Days 8-14: every 3 days
-      if (day <= 21) return day % 4 === 0; // Days 15-21: every 4 days
-      return day % 5 === 0; // Days 22+: every 5 days
-    };
+    const simulateSpacedReviews = (): SimulationResult => {
+      const today = startOfDay(new Date());
+      const rows: Array<{
+        date: string;
+        noReview: number;
+        withSpacedReview: number;
+      }> = [];
 
-    // Calculate mastery at a specific day using last review's exponential decay
-    // M(t) = M₀ * e^(-λ * Δt)
-    const calculateMasteryWithReview = (day: number): number => {
-      if (reviewEvents.length === 0) {
-        // Before first review: pure exponential decay
-        return clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
-      }
+      // No‑review path: same forgetting curve, but without any boosts.
+      let noReviewMastery = currentMasteryPct;
+      const noReviewMemoryStrength = baseMemoryStrength;
 
-      // Find the most recent review before/at this day
-      const lastReview = reviewEvents
-        .filter(r => r.day <= day)
-        .sort((a, b) => b.day - a.day)[0];
+      // Spaced‑review path state.
+      let spacedMastery = currentMasteryPct;
+      let spacedMemoryStrength = baseMemoryStrength;
+      const reviewDays: number[] = [];
+      let lastReviewDay = -Infinity;
 
-      if (!lastReview) {
-        return clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
-      }
+      for (let day = 0; day <= horizonDays; day += 1) {
+        const at = addDays(today, day);
 
-      const daysSinceReview = day - lastReview.day;
-      // Smooth exponential decay from last review
-      return clamp(lastReview.masteryAfterReview * Math.exp(-lastReview.lambda * daysSinceReview), 0, 100);
-    };
+        // --- No‑review forecast for this day ---
+        if (day > 0) {
+          noReviewMastery = applyForgetting(
+            noReviewMastery,
+            baseDecayRate,
+            noReviewMemoryStrength,
+            1,
+          );
+        }
 
-    // Generate projection
-    for (let day = 0; day <= horizonDays; day += 1) {
-      const at = addDays(today, day);
+        // --- Spaced‑review forecast for this day ---
+        if (day > 0) {
+          // Natural decay from yesterday to today.
+          spacedMastery = applyForgetting(
+            spacedMastery,
+            baseDecayRate,
+            spacedMemoryStrength,
+            1,
+          );
+        }
 
-      // NO REVIEW scenario: pure exponential forgetting curve
-      const masteryNoReview = clamp(currentMasteryPct * Math.exp(-initialLambda * day), 0, 100);
+        // Predict what tomorrow would look like *without* an extra review.
+        const predictedTomorrow = applyForgetting(
+          spacedMastery,
+          baseDecayRate,
+          spacedMemoryStrength,
+          1,
+        );
 
-      // WITH REVIEW scenario: apply spaced repetition with smooth exponential decay
-      if (shouldReviewOnDay(day)) {
-        // Record review: mastery jumps to ~95%, and we store the current decay rate
-        reviewEvents.push({
-          day: day,
-          masteryAfterReview: maxMasteryAfterReview,
-          lambda: currentLambda,
+        const canReviewToday = day - lastReviewDay >= 1;
+        const needsReviewToBeatThreshold = predictedTomorrow < 75;
+
+        if (canReviewToday && needsReviewToBeatThreshold) {
+          // --- Review update rules (single review per day, min spacing 1 day) ---
+          const reviewBoost = 12 + (100 - spacedMastery) * 0.35;
+          spacedMastery = clamp(spacedMastery + reviewBoost, 0, 100);
+          spacedMemoryStrength = Math.min(maxStrength, spacedMemoryStrength * 1.18);
+          lastReviewDay = day;
+          reviewDays.push(day);
+        }
+
+        rows.push({
+          date: dateLabel(at),
+          noReview: Math.round(noReviewMastery),
+          withSpacedReview: Math.round(spacedMastery),
         });
-
-        // Reduce lambda for future reviews (memory consolidation effect)
-        // Each review makes the memory representation stronger, slowing decay
-        currentLambda *= consolidationFactor;
-        currentLambda = Math.max(currentLambda, minLambda);
       }
 
-      const masteryWithReview = calculateMasteryWithReview(day);
+      return {
+        rows,
+        reviewDays,
+        totalReviews: reviewDays.length,
+      };
+    };
 
-      rows.push({
-        date: dateLabel(at),
-        noReview: Math.round(masteryNoReview),
-        withSpacedReview: Math.round(masteryWithReview),
-      });
-    }
-
+    const { rows } = simulateSpacedReviews();
     return rows;
-  }, [topic, attempts, moduleState]);
+  }, [topic, attempts]);
 
   const activeSession = useMemo(() => {
     if (!state) return null;
