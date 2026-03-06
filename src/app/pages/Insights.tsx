@@ -150,15 +150,34 @@ export default function Insights() {
               <Info className="w-5 h-5" />
             </button>
           </div>
-          {insightLoading && <div className="mt-4 text-sm text-muted-foreground">Generating insights...</div>}
+          {insightLoading && (
+            <div className="mt-4 text-sm text-muted-foreground">Generating personalized insights...</div>
+          )}
           {!!insightSummary && (
-            <div className="mt-4 p-4 rounded-lg border border-primary/30 bg-primary/5">
-              <p className="text-sm text-foreground mb-2">{insightSummary}</p>
-              <ul className="space-y-1 text-sm text-muted-foreground">
-                {insightActions.map((item, idx) => (
-                  <li key={`${item}-${idx}`}>• {item}</li>
-                ))}
-              </ul>
+            <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-4">
+              <div>
+                <div className="text-xs font-semibold tracking-wide text-primary uppercase mb-1">
+                  AI Summary
+                </div>
+                <p className="text-sm text-foreground leading-relaxed">
+                  {insightSummary}
+                </p>
+              </div>
+
+              {insightActions.length > 0 && (
+                <div className="pt-3 border-t border-primary/20">
+                  <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase mb-2">
+                    Priority actions for this week
+                  </div>
+                  <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
+                    {insightActions.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="leading-relaxed">
+                        {item}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           )}
         </div>
