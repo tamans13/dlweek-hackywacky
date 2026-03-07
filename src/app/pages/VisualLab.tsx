@@ -671,7 +671,7 @@ export default function VisualLab() {
               <Input
                 value={conceptInput}
                 onChange={(e) => setConceptInput(e.target.value)}
-                placeholder="eg. VSEPR methane tetrahedral"
+                placeholder="eg. Hooke's Law"
               />
             </div>
             <div>
@@ -680,7 +680,7 @@ export default function VisualLab() {
                 value={promptInput}
                 onChange={(e) => setPromptInput(e.target.value)}
                 className="min-h-[42px]"
-                placeholder="eg. Why bond pairs spread out in CH4"
+                placeholder="eg. Effect of changing spring stiffness on oscillation frequency"
               />
             </div>
           </div>
