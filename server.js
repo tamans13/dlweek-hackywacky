@@ -36,6 +36,22 @@ const MIN_DECAY_PER_DAY = 2;
 const MAX_DECAY_PER_DAY = 15;
 const DEFAULT_DECAY_PER_DAY = 6;
 
+const BRAINOTYPE_NAMES = {
+  sprintosaur: "Sprintosaur",
+  deeposaur: "Deeposaur",
+  methodosaur: "Methodosaur",
+  recoverosaur: "Recoverosaur",
+  flexisaur: "Flexisaur",
+  nightosaur: "Nightosaur",
+};
+
+const LEARNING_STYLE_NAMES = {
+  visual: "Visual Learner",
+  auditory: "Auditory Learner",
+  readingWriting: "Reading/Writing Learner",
+  kinesthetic: "Kinesthetic Learner",
+};
+
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -1630,18 +1646,21 @@ async function buildOnboardingPersonaWithOpenAI(payload) {
 
   try {
     const humanizedAnswers = payload.preferences.answersHumanized || [];
+    const brainotypeId = String(payload.preferences.brainotype?.primary || "").trim().toLowerCase();
+    const learningStyleKey = String(payload.preferences.brainotype?.learningStyle || "").trim();
+    const brainotypeName = BRAINOTYPE_NAMES[brainotypeId] || "Unknown Brainotype";
+    const learningStyleName = LEARNING_STYLE_NAMES[learningStyleKey] || "Unknown Learning Style";
     const prompt = [
       'You are generating personalised study insights.',
-      'The user has been classified as:',
-      `Brainosaur type: ${payload.preferences.brainotype?.primary || 'Unknown'}`,
-      `Learning style: ${payload.preferences.brainotype?.learningStyle || 'Unknown'}`,
-      'Based on their questionnaire answers, generate personalised feedback.',
-      'Explain:',
-      '1. Their likely study behaviour patterns',
+      `The user's Brainotype is: ${brainotypeName}`,
+      `The user's Learning Style is: ${learningStyleName}`,
+      'Based on their questionnaire answers, generate personalised feedback:',
+      '1. Likely study behaviour patterns',
       '2. Strengths of this learning style',
-      '3. Common challenges for this brainosaur type',
-      '4. Specific study suggestions tailored to both their dinosaur type and learning style',
-      'Keep the tone encouraging and practical.',
+      '3. Common challenges for this Brainotype',
+      '4. Specific study suggestions tailored to both Brainotype and Learning Style',
+      'Do not create any new persona name. Use only the actual Brainotype and Learning Style.',
+      'Keep the tone friendly, encouraging, and practical.',
       'Use short sections and bullet points.',
       'Questionnaire answers:',
       JSON.stringify(humanizedAnswers, null, 2),
@@ -1740,17 +1759,43 @@ function sanitizePersonaProfile(raw) {
   };
 }
 
-const VISUALIZATION_TYPES = new Set(['prism-refraction-3d', 'spring-mass-3d']);
+const VISUALIZATION_TYPES = new Set(['molecular-geometry-vsepr', 'prism-refraction-3d', 'spring-mass-3d']);
 
 function sanitizeVisualizationSpec(raw) {
   const input = raw && typeof raw === 'object' ? raw : {};
   const type = VISUALIZATION_TYPES.has(String(input.visualizationType || '').trim())
     ? String(input.visualizationType || '').trim()
-    : 'prism-refraction-3d';
+    : 'molecular-geometry-vsepr';
   const paramsRaw = input.parameters && typeof input.parameters === 'object' ? input.parameters : {};
+  const sceneRaw = input.scene && typeof input.scene === 'object' ? input.scene : {};
+
+  if (type === 'molecular-geometry-vsepr') {
+    const moleculeRaw = String(paramsRaw.molecule || 'CH4').trim().toUpperCase();
+    const molecule = moleculeRaw === 'NH3' || moleculeRaw === 'H2O' ? moleculeRaw : 'CH4';
+    const defaultAngle = molecule === 'NH3' ? 107 : molecule === 'H2O' ? 104.5 : 109.5;
+    return {
+      visualizationType: 'molecular-geometry-vsepr',
+      parameters: {
+        molecule,
+        bondAngleDeg: clamp(Number(paramsRaw.bondAngleDeg || defaultAngle), 85, 125),
+        bondLength: clamp(Number(paramsRaw.bondLength || 1), 0.7, 1.8),
+        repulsionStrength: clamp(Number(paramsRaw.repulsionStrength || 1), 0.5, 1.8),
+        showLonePairs: Boolean(paramsRaw.showLonePairs),
+      },
+      notes: String(input.notes || '').trim(),
+      scene: {
+        template: String(sceneRaw.template || 'vsepr_molecular_geometry_v1').trim() || 'vsepr_molecular_geometry_v1',
+        controls: Array.isArray(sceneRaw.controls)
+          ? sceneRaw.controls.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12)
+          : ['bondAngleDeg', 'bondLength', 'repulsionStrength'],
+        features: Array.isArray(sceneRaw.features)
+          ? sceneRaw.features.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 10)
+          : ['orbitControls', 'angleAnnotation', 'dynamicInsightCard'],
+      },
+    };
+  }
 
   if (type === 'spring-mass-3d') {
-    const sceneRaw = input.scene && typeof input.scene === 'object' ? input.scene : {};
     return {
       visualizationType: type,
       parameters: {
@@ -1769,7 +1814,6 @@ function sanitizeVisualizationSpec(raw) {
     };
   }
 
-  const sceneRaw = input.scene && typeof input.scene === 'object' ? input.scene : {};
   return {
     visualizationType: 'prism-refraction-3d',
     parameters: {
@@ -1843,6 +1887,12 @@ function sanitizeVisualizationRecord(raw) {
       .filter(Boolean)
       .slice(0, 6)
     : [];
+  const teachingFocusRaw = analysisRaw.teachingFocus && typeof analysisRaw.teachingFocus === 'object'
+    ? analysisRaw.teachingFocus
+    : {};
+  const liveInsights = Array.isArray(analysisRaw.liveInsights)
+    ? analysisRaw.liveInsights.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+    : [];
 
   return {
     id,
@@ -1862,6 +1912,15 @@ function sanitizeVisualizationRecord(raw) {
       confidence: clamp(Number(analysisRaw.confidence || 0), 0, 1),
       learningGoal: String(analysisRaw.learningGoal || '').trim(),
       rationale: String(analysisRaw.rationale || '').trim(),
+      teachingFocus: {
+        centralAtom: String(teachingFocusRaw.centralAtom || '').trim(),
+        surroundingAtoms: String(teachingFocusRaw.surroundingAtoms || '').trim(),
+        emphasis: Array.isArray(teachingFocusRaw.emphasis)
+          ? teachingFocusRaw.emphasis.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+          : [],
+        targetBondAngleDeg: clamp(Number(teachingFocusRaw.targetBondAngleDeg || 109.5), 85, 125),
+      },
+      liveInsights,
       conceptCandidates,
       guidedSteps,
     },
@@ -3384,27 +3443,50 @@ async function syncTopicDocumentSummaries(userId, data, moduleNameFilter = null,
   }
 }
 
-function visualizeConceptCandidates() {
+function chemistryConceptTemplates() {
   return [
-    { concept: "Hooke's Law", terms: ['hooke', 'spring constant', 'elastic', 'oscillation', 'harmonic'] },
-    { concept: "Refraction Through a Prism", terms: ['snell', 'refraction', 'prism', 'refractive index', 'dispersion', 'wavelength'] },
-    { concept: 'Circuit Dynamics', terms: ['voltage', 'current', 'resistor', 'capacitor', 'inductor', 'circuit'] },
-    { concept: 'Projectile Motion', terms: ['trajectory', 'projectile', 'velocity', 'acceleration', 'gravity'] },
-    { concept: 'Supply and Demand Equilibrium', terms: ['demand', 'supply', 'equilibrium', 'price elasticity', 'market'] },
+    {
+      concept: 'Tetrahedral molecular geometry',
+      molecule: 'CH4',
+      terms: [
+        'vsepr',
+        'methane',
+        'ch4',
+        'tetrahedral',
+        'bond pair repulsion',
+        'covalent bonding',
+        'molecular geometry',
+        '109.5',
+      ],
+      scoreBoost: 1.15,
+    },
+    {
+      concept: 'Trigonal pyramidal molecular geometry',
+      molecule: 'NH3',
+      terms: ['ammonia', 'nh3', 'trigonal pyramidal', 'lone pair', 'vsepr'],
+      scoreBoost: 0.95,
+    },
+    {
+      concept: 'Bent molecular geometry',
+      molecule: 'H2O',
+      terms: ['water', 'h2o', 'bent', 'angular geometry', 'lone pair', 'vsepr'],
+      scoreBoost: 0.9,
+    },
   ];
 }
 
-function visualTextPool(selectedDocs, conceptInput, promptInput) {
+function visualTextPool(selectedDocs, conceptInput, promptInput, topicName = '') {
   return [
     String(conceptInput || ''),
     String(promptInput || ''),
+    String(topicName || ''),
     ...selectedDocs.map((doc) => String(doc.fileName || '')),
     ...selectedDocs.map((doc) => String(doc.extractedText || '').slice(0, 12000)),
   ].join('\n').toLowerCase();
 }
 
 function scoreConceptCandidates(textPool) {
-  const candidates = visualizeConceptCandidates();
+  const candidates = chemistryConceptTemplates();
   const scored = [];
   for (const candidate of candidates || []) {
     const rawScore = candidate.terms.reduce((sum, term) => {
@@ -3415,168 +3497,136 @@ function scoreConceptCandidates(textPool) {
     if (rawScore <= 0) continue;
     scored.push({
       concept: candidate.concept,
-      score: Number((rawScore / Math.max(1, candidate.terms.length)).toFixed(3)),
+      molecule: candidate.molecule,
+      score: Number(((rawScore / Math.max(1, candidate.terms.length)) * Number(candidate.scoreBoost || 1)).toFixed(3)),
     });
   }
   return scored.sort((a, b) => b.score - a.score).slice(0, 6);
 }
 
-function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput) {
-  const fromInput = String(conceptInput || '').trim();
-  if (fromInput) {
+function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput, topicName = '') {
+  const inputText = String(conceptInput || '').trim();
+  const inputScored = scoreConceptCandidates(visualTextPool([], inputText, '', topicName));
+  if (inputScored.length && inputScored[0].score >= 0.14) {
     return {
-      primaryConcept: shortText(fromInput, 80),
+      primaryConcept: inputScored[0].concept,
+      molecule: inputScored[0].molecule || 'CH4',
       source: 'concept-input',
-      confidence: 0.98,
-      candidates: [{ concept: shortText(fromInput, 80), score: 1 }],
-      rationale: 'User-provided concept/topic input was prioritized.',
+      confidence: clamp(Math.max(0.76, inputScored[0].score), 0, 1),
+      candidates: inputScored.map((item) => ({ concept: item.concept, score: item.score })),
+      rationale: 'User concept/topic matched a supported chemistry visualization template.',
     };
   }
 
-  const textPool = visualTextPool(selectedDocs, conceptInput, promptInput);
-  const scored = scoreConceptCandidates(textPool);
-  if (scored.length) {
+  const docTextPool = visualTextPool(selectedDocs, '', '', topicName);
+  const docsScored = scoreConceptCandidates(docTextPool);
+  if (docsScored.length && docsScored[0].score >= 0.16) {
     return {
-      primaryConcept: scored[0].concept,
+      primaryConcept: docsScored[0].concept,
+      molecule: docsScored[0].molecule || 'CH4',
       source: 'selected-documents',
-      confidence: clamp(scored[0].score, 0, 1),
-      candidates: scored,
-      rationale: 'Concept chosen from weighted keyword matches in selected document names/text and prompt.',
+      confidence: clamp(Math.max(0.66, docsScored[0].score), 0, 1),
+      candidates: docsScored.map((item) => ({ concept: item.concept, score: item.score })),
+      rationale: 'Concept extracted from selected document names/content with chemistry-priority matching.',
     };
   }
 
-  const tokenCounts = {};
-  for (const token of textPool.split(/[^a-z0-9]+/)) {
-    const word = token.trim();
-    if (!word || word.length < 5 || GROUNDING_STOPWORDS.has(word)) continue;
-    tokenCounts[word] = (tokenCounts[word] || 0) + 1;
-  }
-  const topToken = Object.entries(tokenCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-  if (topToken) {
-    const label = `${topToken.slice(0, 1).toUpperCase()}${topToken.slice(1)} Concept`;
+  const promptScored = scoreConceptCandidates(visualTextPool([], '', promptInput, topicName));
+  if (promptScored.length && promptScored[0].score >= 0.12) {
     return {
-      primaryConcept: label,
+      primaryConcept: promptScored[0].concept,
+      molecule: promptScored[0].molecule || 'CH4',
       source: 'prompt-input',
-      confidence: 0.45,
-      candidates: [{ concept: label, score: 0.45 }],
-      rationale: 'No high-confidence known concept was found, so a prompt-driven fallback concept was generated.',
+      confidence: clamp(Math.max(0.56, promptScored[0].score), 0, 1),
+      candidates: promptScored.map((item) => ({ concept: item.concept, score: item.score })),
+      rationale: 'Prompt intent matched a supported chemistry concept template.',
     };
   }
+
   return {
-    primaryConcept: 'Refraction Through a Prism',
+    primaryConcept: 'Tetrahedral molecular geometry',
+    molecule: 'CH4',
     source: 'fallback-default',
-    confidence: 0.35,
-    candidates: [{ concept: 'Refraction Through a Prism', score: 0.35 }],
-    rationale: 'No reliable signal found in selected context; fallback demo-friendly concept selected.',
+    confidence: 0.52,
+    candidates: [{ concept: 'Tetrahedral molecular geometry', score: 0.52 }],
+    rationale: inputText
+      ? 'Input did not map to a supported chemistry visualisation in this demo build, so defaulted to tetrahedral CH4.'
+      : 'No strong concept signal found; defaulted to tetrahedral CH4 for stable VSEPR demo coverage.',
   };
 }
 
-function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '') {
-  const lower = `${String(primaryConcept || '')} ${String(promptInput || '')}`.toLowerCase();
-  if (
-    lower.includes('hooke')
-    || lower.includes('spring')
-    || lower.includes('oscillat')
-    || lower.includes('elastic')
-  ) {
-    return sanitizeVisualizationSpec({
-      visualizationType: 'spring-mass-3d',
-      parameters: {
-        springConstant: 24,
-        mass: 1.2,
-        displacement: 0.45,
-        damping: 0.08,
-      },
-      notes: 'Interactive spring-mass system for Hooke-style behavior.',
-      scene: {
-        template: 'spring_mass_v1',
-        controls: ['springConstant', 'mass', 'displacement', 'damping'],
-      },
-    });
-  }
+function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '', conceptDecision = null) {
+  const moleculeRaw = String(conceptDecision?.molecule || '').trim().toUpperCase();
+  const molecule = moleculeRaw === 'NH3' || moleculeRaw === 'H2O' ? moleculeRaw : 'CH4';
+  const baselineAngle = molecule === 'NH3' ? 107 : molecule === 'H2O' ? 104.5 : 109.5;
 
   return sanitizeVisualizationSpec({
-    visualizationType: 'prism-refraction-3d',
+    visualizationType: 'molecular-geometry-vsepr',
     parameters: {
-      incidentAngleDeg: 35,
-      refractiveIndex: 1.52,
-      wavelengthNm: 540,
-      prismAngleDeg: 60,
-      beamIntensity: 0.9,
+      molecule,
+      bondAngleDeg: baselineAngle,
+      bondLength: 1,
+      repulsionStrength: 1,
+      showLonePairs: molecule !== 'CH4',
     },
-    notes: 'Triangular prism simulation for refraction, dispersion, and internal reflection.',
+    notes: shortText(promptInput || `VSEPR molecular geometry explorer for ${primaryConcept}`, 180),
     scene: {
-      template: 'prism_snell_v1',
-      controls: ['incidentAngleDeg', 'refractiveIndex', 'wavelengthNm', 'beamIntensity'],
-      features: ['dispersion', 'internalReflection'],
+      template: 'vsepr_molecular_geometry_v1',
+      controls: ['bondAngleDeg', 'bondLength', 'repulsionStrength'],
+      features: ['orbitControls', 'atomsAsSpheres', 'bondsAsSticks', 'angleAnnotation', 'dynamicInsightCard'],
     },
   });
 }
 
 function buildVisualTeacherPlan(primaryConcept, spec, promptInput = '') {
-  const type = spec?.visualizationType || 'prism-refraction-3d';
-  if (type === 'spring-mass-3d') {
-    return {
-      learningGoal: `Understand how ${primaryConcept} links force, displacement, and oscillation response.`,
-      guidedSteps: [
-        {
-          id: 'step_1',
-          title: 'Baseline equilibrium',
-          instruction: 'Set displacement low and observe the near-equilibrium motion.',
-          focusParameter: 'displacement',
-        },
-        {
-          id: 'step_2',
-          title: 'Stiffness effect',
-          instruction: 'Increase spring constant and compare oscillation speed.',
-          focusParameter: 'springConstant',
-        },
-        {
-          id: 'step_3',
-          title: 'Mass effect',
-          instruction: 'Increase mass and observe slower oscillation with the same spring.',
-          focusParameter: 'mass',
-        },
-        {
-          id: 'step_4',
-          title: 'Damping effect',
-          instruction: 'Raise damping and notice amplitude decay over time.',
-          focusParameter: 'damping',
-        },
-      ],
-      rationale: shortText(promptInput || 'Scaffolding emphasizes one-parameter-at-a-time exploration for cause-effect clarity.', 160),
-    };
-  }
+  const molecule = String(spec?.parameters?.molecule || 'CH4').toUpperCase();
+  const centralAtom = molecule === 'NH3' ? 'Nitrogen (N)' : molecule === 'H2O' ? 'Oxygen (O)' : 'Carbon (C)';
+  const surroundingAtom = molecule === 'NH3' ? 'Hydrogen (H)' : molecule === 'H2O' ? 'Hydrogen (H)' : 'Hydrogen (H)';
+  const targetAngle = molecule === 'NH3' ? 107 : molecule === 'H2O' ? 104.5 : 109.5;
 
   return {
-    learningGoal: `Understand ${primaryConcept} by connecting incident angle, refractive index, and wavelength to beam paths.`,
+    learningGoal: `Understand ${primaryConcept} using VSEPR by linking electron-pair repulsion to 3D bond arrangement.`,
+    teachingFocus: {
+      centralAtom,
+      surroundingAtoms: surroundingAtom,
+      emphasis: [
+        '3D arrangement around the central atom',
+        'Bond-angle change under repulsion',
+        'Relationship between pair repulsion and observed shape',
+      ],
+      targetBondAngleDeg: targetAngle,
+    },
     guidedSteps: [
       {
         id: 'step_1',
-        title: 'Set a baseline ray',
-        instruction: 'Keep refractive index near 1.50 and observe baseline bending at moderate angle.',
-        focusParameter: 'incidentAngleDeg',
+        title: 'Identify arrangement',
+        instruction: `Rotate the molecule and locate the ${centralAtom} with surrounding ${surroundingAtom} atoms in 3D.`,
+        focusParameter: 'bondAngleDeg',
       },
       {
         id: 'step_2',
-        title: 'Material change',
-        instruction: 'Increase refractive index and compare output beam deflection.',
-        focusParameter: 'refractiveIndex',
+        title: 'Anchor the baseline angle',
+        instruction: `Set bond angle near ${targetAngle.toFixed(1)}deg and observe the canonical ${primaryConcept.toLowerCase()} shape.`,
+        focusParameter: 'bondAngleDeg',
       },
       {
         id: 'step_3',
-        title: 'Color dispersion',
-        instruction: 'Adjust wavelength and observe color-dependent splitting.',
-        focusParameter: 'wavelengthNm',
+        title: 'Vary bond length',
+        instruction: 'Adjust bond length to compare compact versus expanded molecular size while keeping shape cues visible.',
+        focusParameter: 'bondLength',
       },
       {
         id: 'step_4',
-        title: 'Critical-angle exploration',
-        instruction: 'Push incident angle upward to see stronger internal reflection behavior.',
-        focusParameter: 'incidentAngleDeg',
+        title: 'Repulsion and distortion',
+        instruction: 'Increase repulsion strength to see bonds push apart and the displayed bond angle respond.',
+        focusParameter: 'repulsionStrength',
       },
     ],
-    rationale: shortText(promptInput || 'Scaffolding follows a structured progression from baseline refraction to dispersion and internal reflection.', 160),
+    liveInsights: [
+      'Increasing repulsion tends to increase separation between bonding directions.',
+      'The displayed bond angle helps compare ideal VSEPR geometry against current settings.',
+    ],
+    rationale: shortText(promptInput || 'Teacher flow emphasizes atom roles, baseline geometry, then controlled variable changes for conceptual transfer.', 180),
   };
 }
 
@@ -3587,6 +3637,12 @@ function listTopicVisualizations(moduleName, topicName, data) {
     .filter(Boolean)
     .filter((item) => item.moduleName === moduleName && item.topicName === topicName)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function getTopicVisualizationById(moduleName, topicName, visualizationId, data) {
+  if (!visualizationId) return null;
+  const list = listTopicVisualizations(moduleName, topicName, data);
+  return list.find((item) => item.id === visualizationId) || null;
 }
 
 function removeTopicVisualizations(moduleName, topicName, data) {
@@ -5610,6 +5666,19 @@ async function apiHandler(req, res, parsedUrl) {
     });
   }
 
+  if (req.method === 'GET' && pathname === '/api/topic/visual-lab/item') {
+    const moduleName = String(parsedUrl.searchParams.get('moduleName') || '').trim();
+    const topicName = String(parsedUrl.searchParams.get('topicName') || '').trim();
+    const id = String(parsedUrl.searchParams.get('id') || '').trim();
+    if (!moduleName || !topicName || !id) {
+      return send(res, 400, { error: 'moduleName, topicName and id query params are required' });
+    }
+
+    const visualization = getTopicVisualizationById(moduleName, topicName, id, data);
+    if (!visualization) return send(res, 404, { error: 'Visualization not found for this topic.' });
+    return send(res, 200, { visualization });
+  }
+
   if (req.method === 'POST' && pathname === '/api/topic/visual-lab/generate') {
     const body = await parseBody(req);
     const moduleName = String(body.moduleName || '').trim();
@@ -5633,9 +5702,9 @@ async function apiHandler(req, res, parsedUrl) {
       return send(res, 400, { error: 'Selected documents were not found for this topic. Refresh and try again.' });
     }
 
-    const conceptDecision = buildPrimaryVisualConcept(selectedDocuments, conceptInput, promptInput);
+    const conceptDecision = buildPrimaryVisualConcept(selectedDocuments, conceptInput, promptInput, topicName);
     const primaryConcept = conceptDecision.primaryConcept;
-    const spec = buildVisualizationSpecFromConcept(primaryConcept, promptInput);
+    const spec = buildVisualizationSpecFromConcept(primaryConcept, promptInput, conceptDecision);
     const teacherPlan = buildVisualTeacherPlan(primaryConcept, spec, promptInput);
     const promptSummary = shortText(promptInput || `Interactive visual for ${primaryConcept}`, 140);
 
@@ -5656,6 +5725,8 @@ async function apiHandler(req, res, parsedUrl) {
           confidence: conceptDecision.confidence,
           rationale: conceptDecision.rationale || teacherPlan.rationale,
           learningGoal: teacherPlan.learningGoal,
+          teachingFocus: teacherPlan.teachingFocus,
+          liveInsights: teacherPlan.liveInsights,
           guidedSteps: teacherPlan.guidedSteps,
           conceptCandidates: conceptDecision.candidates || [],
         },
@@ -5670,6 +5741,8 @@ async function apiHandler(req, res, parsedUrl) {
       selectedDocumentCount: selectedDocuments.length,
       extraction: {
         primaryConcept,
+        molecule: String(spec?.parameters?.molecule || 'CH4'),
+        template: String(spec?.scene?.template || 'vsepr_molecular_geometry_v1'),
         source: conceptDecision.source,
         confidence: conceptDecision.confidence,
         candidates: conceptDecision.candidates || [],

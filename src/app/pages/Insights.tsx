@@ -210,7 +210,7 @@ export default function Insights() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Peak Performance Time</h3>
@@ -240,7 +240,7 @@ export default function Insights() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Study Length vs Retention</h3>
@@ -256,7 +256,7 @@ export default function Insights() {
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <AlertTriangle className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Burnout Trend</h3>
@@ -285,7 +285,7 @@ export default function Insights() {
 
         <Link
           to="/dashboard/profile#study-techniques"
-          className="block bg-primary/5 border-2 border-primary/30 rounded-lg p-6 hover:bg-primary/10 transition-all group"
+          className="block bg-primary/5 border-2 border-primary/30 rounded-lg p-6 hover:bg-primary/10 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/60 transition-all duration-200 group"
         >
           <div className="flex items-center justify-between">
             <div className="flex-1">

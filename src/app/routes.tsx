@@ -8,7 +8,7 @@ import Insights from "./pages/Insights";
 import ExamReadiness from "./pages/ExamReadiness";
 import Settings from "./pages/Settings";
 import Profile from "./pages/Profile";
-import BrainosaursPage from "./pages/Brainosaurs";
+import BrainotypePage from "./pages/Brainosaurs";
 import Login from "./pages/Login";
 import OnboardingWelcome from "./pages/onboarding/Welcome";
 import OnboardingPreferences from "./pages/onboarding/Preferences";
@@ -76,7 +76,7 @@ export const router = createBrowserRouter([
       }},
       { path: "insights", Component: Insights },
       { path: "exam-readiness", Component: ExamReadiness },
-      { path: "brainosaurs", Component: BrainosaursPage },
+      { path: "brainotype", Component: BrainotypePage },
       { path: "settings", Component: Settings },
       { path: "profile", Component: Profile },
     ],

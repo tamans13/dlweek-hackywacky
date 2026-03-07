@@ -1,6 +1,8 @@
 import { AlertCircle, TrendingUp, Info, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { avg } from "../lib/format";
+import { toSlug } from "../lib/ids";
 import { useAppData } from "../state/AppDataContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
@@ -81,9 +83,9 @@ function learnerAbilityScore(masteryValue: number, moduleFocusEfficiency: number
 
   return clamp(
     0.45 * (masteryPct / 100) +
-      0.25 * focus +
-      0.2 * quizMean +
-      0.1 * consistency,
+    0.25 * focus +
+    0.2 * quizMean +
+    0.1 * consistency,
     0,
     1,
   );
@@ -138,7 +140,7 @@ function expandSpacedRepDates(
 }
 
 export default function Dashboard() {
-  const { state, loading, error } = useAppData();
+  const { state, loading, error, authUser } = useAppData();
   const [calendarView, setCalendarView] = useState<CalendarView>("month");
   const [calendarCursor, setCalendarCursor] = useState(() => {
     const now = new Date();
@@ -147,11 +149,27 @@ export default function Dashboard() {
   });
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
-  const greeting = "Welcome!";
+
 
   const moduleValues = state ? Object.values(state.modules) : [];
   const burnoutRisk = Math.round(avg(moduleValues.map((x) => x.burnoutRisk || 0)));
   const focusEfficiency = Math.round(avg(moduleValues.map((x) => x.focusEfficiency || 0)));
+
+  const userName = useMemo(() => {
+    const fullName = state?.profile?.fullName?.trim();
+    if (fullName) return fullName.split(" ")[0];
+    const email = authUser?.email || "";
+    return email.split("@")[0] || "there";
+  }, [state, authUser]);
+
+  const DINO_PUNS = [
+    "Are you RAWRdy to study? 🦕",
+    "Time to get your dino-mite brain going! 🦖",
+    "Let's make today ex-stinct-ly productive! 💪",
+    "Fossil your worries away and study! 📚",
+    "It's time to be a dino-saur of knowledge! 🌟",
+  ];
+  const dinoPun = useMemo(() => DINO_PUNS[Math.floor(Date.now() / 86400000) % DINO_PUNS.length], []);
 
   const eventCounts = useMemo(() => {
     if (!state) return { learning: 0, distraction: 0, help: 0 };
@@ -281,7 +299,7 @@ export default function Dashboard() {
   const eventClasses = (type: CalendarEventType) =>
     type === "exam"
       ? "bg-orange-300 text-black"
-      : "bg-blue-100 text-blue-800";
+      : "bg-amber-800/20 text-amber-900 border border-amber-700/30";
 
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading dashboard...</div>;
@@ -295,14 +313,14 @@ export default function Dashboard() {
     <div className="min-h-screen">
       <div className="border-b border-border bg-card">
         <div className="max-w-6xl mx-auto px-6 py-5">
-          <h1 className="text-2xl font-medium text-foreground">{greeting}</h1>
-          <p className="text-muted-foreground mt-0.5">Here&apos;s your learning overview</p>
+          <h1 className="text-2xl font-medium text-foreground">Welcome, {userName}! 👋</h1>
+          <p className="text-muted-foreground mt-0.5 italic">{dinoPun}</p>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.03] hover:border-primary/40 transition-all duration-200 cursor-default">
             <div className="flex items-center gap-2 mb-3">
               <AlertCircle className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground">Burnout Risk</h3>
@@ -340,7 +358,7 @@ export default function Dashboard() {
             <p className="text-sm text-muted-foreground text-center mt-2">Sustainability across your modules</p>
           </div>
 
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.03] hover:border-primary/40 transition-all duration-200 cursor-default">
             <div className="flex items-center gap-2 mb-3">
               <TrendingUp className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground">Focus Efficiency</h3>
@@ -514,11 +532,11 @@ export default function Dashboard() {
             <DialogTitle>
               {selectedDayKey
                 ? dateFromKey(selectedDayKey).toLocaleDateString(undefined, {
-                    weekday: "long",
-                    month: "long",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })
                 : "Day Events"}
             </DialogTitle>
           </DialogHeader>
@@ -526,9 +544,17 @@ export default function Dashboard() {
             {!activeDayEvents.length && <p className="text-sm text-muted-foreground">No events for this day.</p>}
             {activeDayEvents.map((event) => (
               <div key={event.id} className="flex items-center justify-between border border-border rounded-md px-3 py-2">
-                <span className="text-sm text-foreground">
-                  {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : event.moduleName}
-                </span>
+                {event.type === "spacedRep" && event.topicName ? (
+                  <Link
+                    to={`/dashboard/modules/${toSlug(event.moduleName)}/topics/${toSlug(event.topicName)}`}
+                    onClick={() => setSelectedDayKey(null)}
+                    className="text-sm text-foreground hover:text-primary hover:underline transition-colors font-medium"
+                  >
+                    {event.topicName} <span className="text-muted-foreground font-normal">({event.moduleName})</span>
+                  </Link>
+                ) : (
+                  <span className="text-sm text-foreground">{event.moduleName}</span>
+                )}
                 <span className={`text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}>{event.type === "exam" ? "Exam" : "Spaced Rep"}</span>
               </div>
             ))}

@@ -1,6 +1,6 @@
 import { BrainotypeId, Brainotype, brainotypeOrder } from "./brainotypes";
 
-export type LearningStyleId = "visual" | "auditory" | "kinesthetic";
+export type LearningStyleId = "visual" | "auditory" | "readingWriting" | "kinesthetic";
 
 export type BrainotypeResult = {
   primary: BrainotypeId;
@@ -26,7 +26,7 @@ const initScores = (): Scores =>
     return acc;
   }, {} as Scores);
 
-const learningStyleOrder: LearningStyleId[] = ["visual", "auditory", "kinesthetic"];
+const learningStyleOrder: LearningStyleId[] = ["visual", "auditory", "readingWriting", "kinesthetic"];
 
 const initLearningStyleScores = (): Record<LearningStyleId, number> =>
   learningStyleOrder.reduce((acc, style) => {
@@ -37,12 +37,14 @@ const initLearningStyleScores = (): Record<LearningStyleId, number> =>
 export const learningStyleLabels: Record<LearningStyleId, string> = {
   visual: "Visual Learner",
   auditory: "Auditory Learner",
+  readingWriting: "Reading/Writing Learner",
   kinesthetic: "Kinesthetic Learner",
 };
 
 export const learningStyleDescriptions: Record<LearningStyleId, string> = {
   visual: "Diagrams, charts, and structured notes help you make sense of complex concepts.",
   auditory: "Talking through ideas, listening to explanations, and group reviews keep you engaged.",
+  readingWriting: "Reading details and rewriting notes help you internalize structures and arguments.",
   kinesthetic: "Hands-on practice and examples help knowledge stick—doing beats just reading.",
 };
 
