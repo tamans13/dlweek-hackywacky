@@ -200,6 +200,7 @@ function labelWithTooltip(label: string, content: string) {
 }
 
 function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
+  const [hoveredAtom, setHoveredAtom] = useState<"center" | number | null>(null);
   const vectorsData = useMemo(
     () => getMoleculeVectors(spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength),
     [spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength],
@@ -211,18 +212,104 @@ function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
   const bondLength = spec.parameters.bondLength * 2.2;
   const atomPositions = vectorsData.vectors.map((v) => new THREE.Vector3(v.x * bondLength, v.y * bondLength, v.z * bondLength));
   const centerPosition = new THREE.Vector3(0, 0, 0);
+  const showGuide = hoveredAtom !== null;
+  const guideVertices = useMemo(() => {
+    const values: number[] = [];
+    if (atomPositions.length < 3) return values;
+    for (let i = 0; i < atomPositions.length; i += 1) {
+      for (let j = i + 1; j < atomPositions.length; j += 1) {
+        const a = atomPositions[i];
+        const b = atomPositions[j];
+        values.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+    return values;
+  }, [atomPositions]);
 
   return (
     <div className="relative w-full h-full rounded-lg border border-[#d8e7cf] bg-card overflow-hidden">
       <Canvas camera={{ position: [2.9, 2.2, 2.9], fov: 42 }}>
-        <color attach="background" args={["#f6fbf2"]} />
+        <color attach="background" args={["#e3eddc"]} />
         <ambientLight intensity={0.68} />
         <directionalLight position={[4, 5, 4]} intensity={0.95} />
         <pointLight position={[-3, -2, 5]} intensity={0.45} />
 
-        <mesh position={[0, 0, 0]}>
+        <gridHelper
+          args={[8, 16, "#7f9a79", "#a8bca3"]}
+          position={[0, -1.3, 0]}
+          onUpdate={(helper) => {
+            const mat = helper.material as THREE.Material & { opacity?: number; transparent?: boolean };
+            mat.transparent = true;
+            mat.opacity = 0.74;
+          }}
+        />
+
+        <group position={[-2.2, -1.2, 2.2]}>
+          <line>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                count={2}
+                array={new Float32Array([0, 0, 0, 0.52, 0, 0])}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#ad4f4f" transparent opacity={0.78} />
+          </line>
+          <line>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                count={2}
+                array={new Float32Array([0, 0, 0, 0, 0.52, 0])}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#3f7f4a" transparent opacity={0.78} />
+          </line>
+          <line>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                count={2}
+                array={new Float32Array([0, 0, 0, 0, 0, 0.52])}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#4663b0" transparent opacity={0.78} />
+          </line>
+        </group>
+
+        {showGuide && guideVertices.length ? (
+          <lineSegments>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                count={guideVertices.length / 3}
+                array={new Float32Array(guideVertices)}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#5d7c6b" transparent opacity={0.6} />
+          </lineSegments>
+        ) : null}
+
+        <mesh
+          position={[0, 0, 0]}
+          onPointerOver={(e) => {
+            e.stopPropagation();
+            setHoveredAtom("center");
+          }}
+          onPointerOut={() => setHoveredAtom((prev) => (prev === "center" ? null : prev))}
+        >
           <sphereGeometry args={[centerAtomRadius, 32, 32]} />
-          <meshStandardMaterial color="#e33d3d" roughness={0.5} metalness={0.1} />
+          <meshStandardMaterial
+            color="#e33d3d"
+            roughness={0.5}
+            metalness={0.1}
+            emissive="#ffffff"
+            emissiveIntensity={hoveredAtom === "center" ? 0.18 : 0.02}
+          />
         </mesh>
 
         {atomPositions.map((to, index) => {
@@ -246,9 +333,22 @@ function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
                 <meshStandardMaterial color="#d8d8d8" roughness={0.52} metalness={0.1} />
               </mesh>
 
-              <mesh position={to.toArray()}>
+              <mesh
+                position={to.toArray()}
+                onPointerOver={(e) => {
+                  e.stopPropagation();
+                  setHoveredAtom(index);
+                }}
+                onPointerOut={() => setHoveredAtom((prev) => (prev === index ? null : prev))}
+              >
                 <sphereGeometry args={[hydrogenAtomRadius, 32, 32]} />
-                <meshStandardMaterial color="#2f70ff" roughness={0.48} metalness={0.1} />
+                <meshStandardMaterial
+                  color="#2f70ff"
+                  roughness={0.48}
+                  metalness={0.1}
+                  emissive="#ffffff"
+                  emissiveIntensity={hoveredAtom === index ? 0.2 : 0.02}
+                />
               </mesh>
             </group>
           );
@@ -258,7 +358,7 @@ function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
       </Canvas>
 
       <div className="absolute left-3 bottom-2 text-[12px] font-semibold text-[#335942] pointer-events-none">
-        Drag to rotate molecule
+        Drag to rotate • Scroll to zoom
       </div>
     </div>
   );
