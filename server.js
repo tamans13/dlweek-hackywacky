@@ -1750,6 +1750,7 @@ function sanitizeVisualizationSpec(raw) {
   const paramsRaw = input.parameters && typeof input.parameters === 'object' ? input.parameters : {};
 
   if (type === 'spring-mass-3d') {
+    const sceneRaw = input.scene && typeof input.scene === 'object' ? input.scene : {};
     return {
       visualizationType: type,
       parameters: {
@@ -1759,9 +1760,16 @@ function sanitizeVisualizationSpec(raw) {
         damping: clamp(Number(paramsRaw.damping || 0.08), 0, 0.6),
       },
       notes: String(input.notes || '').trim(),
+      scene: {
+        template: String(sceneRaw.template || 'spring_mass_v1').trim() || 'spring_mass_v1',
+        controls: Array.isArray(sceneRaw.controls)
+          ? sceneRaw.controls.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12)
+          : ['springConstant', 'mass', 'displacement', 'damping'],
+      },
     };
   }
 
+  const sceneRaw = input.scene && typeof input.scene === 'object' ? input.scene : {};
   return {
     visualizationType: 'prism-refraction-3d',
     parameters: {
@@ -1772,6 +1780,15 @@ function sanitizeVisualizationSpec(raw) {
       beamIntensity: clamp(Number(paramsRaw.beamIntensity || 0.85), 0.2, 1),
     },
     notes: String(input.notes || '').trim(),
+    scene: {
+      template: String(sceneRaw.template || 'prism_snell_v1').trim() || 'prism_snell_v1',
+      controls: Array.isArray(sceneRaw.controls)
+        ? sceneRaw.controls.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 12)
+        : ['incidentAngleDeg', 'refractiveIndex', 'wavelengthNm', 'beamIntensity'],
+      features: Array.isArray(sceneRaw.features)
+        ? sceneRaw.features.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+        : ['dispersion', 'internalReflection'],
+    },
   };
 }
 
@@ -1794,6 +1811,38 @@ function sanitizeVisualizationRecord(raw) {
   const updatedAtRaw = String(raw.updatedAt || '').trim();
   const createdAt = Number.isFinite(new Date(createdAtRaw).getTime()) ? new Date(createdAtRaw).toISOString() : nowIso();
   const updatedAt = Number.isFinite(new Date(updatedAtRaw).getTime()) ? new Date(updatedAtRaw).toISOString() : createdAt;
+  const analysisRaw = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : {};
+  const guidedSteps = Array.isArray(analysisRaw.guidedSteps)
+    ? analysisRaw.guidedSteps
+      .map((step, index) => {
+        if (!step || typeof step !== 'object') return null;
+        const title = String(step.title || '').trim();
+        const instruction = String(step.instruction || '').trim();
+        if (!title || !instruction) return null;
+        return {
+          id: String(step.id || `step_${index + 1}`).trim() || `step_${index + 1}`,
+          title,
+          instruction,
+          focusParameter: String(step.focusParameter || '').trim(),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 6)
+    : [];
+  const conceptCandidates = Array.isArray(analysisRaw.conceptCandidates)
+    ? analysisRaw.conceptCandidates
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const concept = String(item.concept || '').trim();
+        if (!concept) return null;
+        return {
+          concept,
+          score: clamp(Number(item.score || 0), 0, 1),
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 6)
+    : [];
 
   return {
     id,
@@ -1808,6 +1857,14 @@ function sanitizeVisualizationRecord(raw) {
     promptSummary: String(raw.promptSummary || '').trim(),
     isPrimary: Boolean(raw.isPrimary),
     spec: sanitizeVisualizationSpec(raw.spec),
+    analysis: {
+      source: String(analysisRaw.source || '').trim() || 'heuristic',
+      confidence: clamp(Number(analysisRaw.confidence || 0), 0, 1),
+      learningGoal: String(analysisRaw.learningGoal || '').trim(),
+      rationale: String(analysisRaw.rationale || '').trim(),
+      conceptCandidates,
+      guidedSteps,
+    },
     createdAt,
     updatedAt,
   };
@@ -3337,26 +3394,56 @@ function visualizeConceptCandidates() {
   ];
 }
 
-function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput) {
-  const fromInput = String(conceptInput || '').trim();
-  if (fromInput) return shortText(fromInput, 80);
-
-  const textPool = [
+function visualTextPool(selectedDocs, conceptInput, promptInput) {
+  return [
+    String(conceptInput || ''),
     String(promptInput || ''),
     ...selectedDocs.map((doc) => String(doc.fileName || '')),
     ...selectedDocs.map((doc) => String(doc.extractedText || '').slice(0, 12000)),
   ].join('\n').toLowerCase();
+}
 
+function scoreConceptCandidates(textPool) {
   const candidates = visualizeConceptCandidates();
-  let best = { concept: '', score: 0 };
-  for (const candidate of candidates) {
-    const score = candidate.terms.reduce((sum, term) => {
-      if (!term) return sum;
-      return sum + (textPool.includes(term.toLowerCase()) ? 1 : 0);
+  const scored = [];
+  for (const candidate of candidates || []) {
+    const rawScore = candidate.terms.reduce((sum, term) => {
+      const t = String(term || '').trim().toLowerCase();
+      if (!t) return sum;
+      return sum + (textPool.includes(t) ? 1 : 0);
     }, 0);
-    if (score > best.score) best = { concept: candidate.concept, score };
+    if (rawScore <= 0) continue;
+    scored.push({
+      concept: candidate.concept,
+      score: Number((rawScore / Math.max(1, candidate.terms.length)).toFixed(3)),
+    });
   }
-  if (best.score > 0) return best.concept;
+  return scored.sort((a, b) => b.score - a.score).slice(0, 6);
+}
+
+function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput) {
+  const fromInput = String(conceptInput || '').trim();
+  if (fromInput) {
+    return {
+      primaryConcept: shortText(fromInput, 80),
+      source: 'concept-input',
+      confidence: 0.98,
+      candidates: [{ concept: shortText(fromInput, 80), score: 1 }],
+      rationale: 'User-provided concept/topic input was prioritized.',
+    };
+  }
+
+  const textPool = visualTextPool(selectedDocs, conceptInput, promptInput);
+  const scored = scoreConceptCandidates(textPool);
+  if (scored.length) {
+    return {
+      primaryConcept: scored[0].concept,
+      source: 'selected-documents',
+      confidence: clamp(scored[0].score, 0, 1),
+      candidates: scored,
+      rationale: 'Concept chosen from weighted keyword matches in selected document names/text and prompt.',
+    };
+  }
 
   const tokenCounts = {};
   for (const token of textPool.split(/[^a-z0-9]+/)) {
@@ -3365,8 +3452,23 @@ function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput) {
     tokenCounts[word] = (tokenCounts[word] || 0) + 1;
   }
   const topToken = Object.entries(tokenCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-  if (topToken) return `${topToken.slice(0, 1).toUpperCase()}${topToken.slice(1)} Concept`;
-  return 'Refraction Through a Prism';
+  if (topToken) {
+    const label = `${topToken.slice(0, 1).toUpperCase()}${topToken.slice(1)} Concept`;
+    return {
+      primaryConcept: label,
+      source: 'prompt-input',
+      confidence: 0.45,
+      candidates: [{ concept: label, score: 0.45 }],
+      rationale: 'No high-confidence known concept was found, so a prompt-driven fallback concept was generated.',
+    };
+  }
+  return {
+    primaryConcept: 'Refraction Through a Prism',
+    source: 'fallback-default',
+    confidence: 0.35,
+    candidates: [{ concept: 'Refraction Through a Prism', score: 0.35 }],
+    rationale: 'No reliable signal found in selected context; fallback demo-friendly concept selected.',
+  };
 }
 
 function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '') {
@@ -3386,6 +3488,10 @@ function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '') {
         damping: 0.08,
       },
       notes: 'Interactive spring-mass system for Hooke-style behavior.',
+      scene: {
+        template: 'spring_mass_v1',
+        controls: ['springConstant', 'mass', 'displacement', 'damping'],
+      },
     });
   }
 
@@ -3399,7 +3505,79 @@ function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '') {
       beamIntensity: 0.9,
     },
     notes: 'Triangular prism simulation for refraction, dispersion, and internal reflection.',
+    scene: {
+      template: 'prism_snell_v1',
+      controls: ['incidentAngleDeg', 'refractiveIndex', 'wavelengthNm', 'beamIntensity'],
+      features: ['dispersion', 'internalReflection'],
+    },
   });
+}
+
+function buildVisualTeacherPlan(primaryConcept, spec, promptInput = '') {
+  const type = spec?.visualizationType || 'prism-refraction-3d';
+  if (type === 'spring-mass-3d') {
+    return {
+      learningGoal: `Understand how ${primaryConcept} links force, displacement, and oscillation response.`,
+      guidedSteps: [
+        {
+          id: 'step_1',
+          title: 'Baseline equilibrium',
+          instruction: 'Set displacement low and observe the near-equilibrium motion.',
+          focusParameter: 'displacement',
+        },
+        {
+          id: 'step_2',
+          title: 'Stiffness effect',
+          instruction: 'Increase spring constant and compare oscillation speed.',
+          focusParameter: 'springConstant',
+        },
+        {
+          id: 'step_3',
+          title: 'Mass effect',
+          instruction: 'Increase mass and observe slower oscillation with the same spring.',
+          focusParameter: 'mass',
+        },
+        {
+          id: 'step_4',
+          title: 'Damping effect',
+          instruction: 'Raise damping and notice amplitude decay over time.',
+          focusParameter: 'damping',
+        },
+      ],
+      rationale: shortText(promptInput || 'Scaffolding emphasizes one-parameter-at-a-time exploration for cause-effect clarity.', 160),
+    };
+  }
+
+  return {
+    learningGoal: `Understand ${primaryConcept} by connecting incident angle, refractive index, and wavelength to beam paths.`,
+    guidedSteps: [
+      {
+        id: 'step_1',
+        title: 'Set a baseline ray',
+        instruction: 'Keep refractive index near 1.50 and observe baseline bending at moderate angle.',
+        focusParameter: 'incidentAngleDeg',
+      },
+      {
+        id: 'step_2',
+        title: 'Material change',
+        instruction: 'Increase refractive index and compare output beam deflection.',
+        focusParameter: 'refractiveIndex',
+      },
+      {
+        id: 'step_3',
+        title: 'Color dispersion',
+        instruction: 'Adjust wavelength and observe color-dependent splitting.',
+        focusParameter: 'wavelengthNm',
+      },
+      {
+        id: 'step_4',
+        title: 'Critical-angle exploration',
+        instruction: 'Push incident angle upward to see stronger internal reflection behavior.',
+        focusParameter: 'incidentAngleDeg',
+      },
+    ],
+    rationale: shortText(promptInput || 'Scaffolding follows a structured progression from baseline refraction to dispersion and internal reflection.', 160),
+  };
 }
 
 function listTopicVisualizations(moduleName, topicName, data) {
@@ -3435,6 +3613,7 @@ function createTopicVisualization(payload, data) {
     promptSummary: payload.promptSummary || '',
     isPrimary: true,
     spec: payload.spec,
+    analysis: payload.analysis || {},
     createdAt: now,
     updatedAt: now,
   });
@@ -5454,10 +5633,10 @@ async function apiHandler(req, res, parsedUrl) {
       return send(res, 400, { error: 'Selected documents were not found for this topic. Refresh and try again.' });
     }
 
-    const docsWithText = selectedDocuments.filter((doc) => String(doc.extractedText || '').trim().length > 0);
-
-    const primaryConcept = buildPrimaryVisualConcept(docsWithText, conceptInput, promptInput);
+    const conceptDecision = buildPrimaryVisualConcept(selectedDocuments, conceptInput, promptInput);
+    const primaryConcept = conceptDecision.primaryConcept;
     const spec = buildVisualizationSpecFromConcept(primaryConcept, promptInput);
+    const teacherPlan = buildVisualTeacherPlan(primaryConcept, spec, promptInput);
     const promptSummary = shortText(promptInput || `Interactive visual for ${primaryConcept}`, 140);
 
     const visualization = createTopicVisualization(
@@ -5465,13 +5644,21 @@ async function apiHandler(req, res, parsedUrl) {
         moduleName,
         topicName,
         title: `${primaryConcept} Visualisation`,
-        selectedDocumentIds: docsWithText.map((doc) => doc.id),
-        selectedDocumentNames: docsWithText.map((doc) => doc.fileName),
+        selectedDocumentIds: selectedDocuments.map((doc) => doc.id),
+        selectedDocumentNames: selectedDocuments.map((doc) => doc.fileName),
         primaryConcept,
         userConceptInput: conceptInput,
         userPromptInput: promptInput,
         promptSummary,
         spec,
+        analysis: {
+          source: conceptDecision.source,
+          confidence: conceptDecision.confidence,
+          rationale: conceptDecision.rationale || teacherPlan.rationale,
+          learningGoal: teacherPlan.learningGoal,
+          guidedSteps: teacherPlan.guidedSteps,
+          conceptCandidates: conceptDecision.candidates || [],
+        },
       },
       data,
     );
@@ -5480,10 +5667,12 @@ async function apiHandler(req, res, parsedUrl) {
     return send(res, 200, {
       ok: true,
       visualization,
-      selectedDocumentCount: docsWithText.length,
+      selectedDocumentCount: selectedDocuments.length,
       extraction: {
         primaryConcept,
-        source: conceptInput ? 'concept-input' : docsWithText.length ? 'selected-documents' : 'prompt-input',
+        source: conceptDecision.source,
+        confidence: conceptDecision.confidence,
+        candidates: conceptDecision.candidates || [],
       },
     });
   }

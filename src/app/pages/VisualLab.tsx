@@ -77,6 +77,39 @@ function prismRayOutAngle(incidentDeg: number, refractiveIndex: number, prismDeg
   return (r2 * 180) / Math.PI;
 }
 
+function prismPhysicsSnapshot(spec: VisualizationSpec) {
+  if (spec.visualizationType !== "prism-refraction-3d") return null;
+  const n1 = 1;
+  const n2 = Math.max(1, spec.parameters.refractiveIndex);
+  const i = (spec.parameters.incidentAngleDeg * Math.PI) / 180;
+  const r = Math.asin(Math.min(1, (n1 / n2) * Math.sin(i)));
+  const critical = n2 > n1 ? Math.asin(n1 / n2) : Math.PI / 2;
+  const tirLikely = r > critical * 0.94 && spec.parameters.incidentAngleDeg >= 52;
+  return {
+    n1,
+    n2,
+    incidentDeg: spec.parameters.incidentAngleDeg,
+    refractedDeg: (r * 180) / Math.PI,
+    criticalDeg: (critical * 180) / Math.PI,
+    tirLikely,
+  };
+}
+
+function parameterConditionMet(spec: VisualizationSpec, parameter: string) {
+  if (spec.visualizationType === "prism-refraction-3d") {
+    if (parameter === "refractiveIndex") return spec.parameters.refractiveIndex >= 1.45;
+    if (parameter === "incidentAngleDeg") return spec.parameters.incidentAngleDeg >= 46;
+    if (parameter === "wavelengthNm") return spec.parameters.wavelengthNm <= 460 || spec.parameters.wavelengthNm >= 620;
+    if (parameter === "beamIntensity") return spec.parameters.beamIntensity >= 0.75;
+    return true;
+  }
+  if (parameter === "springConstant") return spec.parameters.springConstant >= 30;
+  if (parameter === "mass") return spec.parameters.mass >= 1.6;
+  if (parameter === "displacement") return spec.parameters.displacement >= 0.35;
+  if (parameter === "damping") return spec.parameters.damping >= 0.12;
+  return true;
+}
+
 function VisualSimulationCanvas({
   spec,
 }: {
@@ -107,8 +140,13 @@ function VisualSimulationCanvas({
 
       ctx.clearRect(0, 0, width, height);
       const gradient = ctx.createLinearGradient(0, 0, width, height);
-      gradient.addColorStop(0, "#F5F8EF");
-      gradient.addColorStop(1, "#EAF2E1");
+      if (spec.visualizationType === "prism-refraction-3d") {
+        gradient.addColorStop(0, "#02091D");
+        gradient.addColorStop(1, "#091A40");
+      } else {
+        gradient.addColorStop(0, "#040B21");
+        gradient.addColorStop(1, "#0A1736");
+      }
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
@@ -201,17 +239,37 @@ function VisualSimulationCanvas({
           const outRad = (outDeg * Math.PI) / 180;
           const inside = rotate({ x: -1.0, y: 0.25, z: 0 });
           const exit = rotate({ x: 0.9, y: -0.22, z: 0 });
+          const tirLikely = refractiveIndex >= 1.45 && incidentAngleDeg >= 55 && i !== 1;
           const outEnd = rotate({
             x: 0.9 + Math.cos(outRad) * 2.5,
             y: -0.22 + Math.sin(outRad) * 2.5,
             z: 0.02 * (i - 1),
           });
           drawLine(ctx, inside, exit, width, height, `rgba(255,255,255,${0.65 * beamIntensity})`, 2.4);
-          drawLine(ctx, exit, outEnd, width, height, wavelengthToColor(lambda), 2.8);
+          if (tirLikely) {
+            const reflectedEnd = rotate({
+              x: 0.05,
+              y: 0.62,
+              z: 0.02 * (i - 1),
+            });
+            drawLine(ctx, exit, reflectedEnd, width, height, wavelengthToColor(lambda), 2.8);
+          } else {
+            drawLine(ctx, exit, outEnd, width, height, wavelengthToColor(lambda), 2.8);
+          }
         }
+
+        ctx.fillStyle = "rgba(216, 227, 255, 0.85)";
+        ctx.font = "600 15px sans-serif";
+        ctx.fillText("Snell's Law", width * 0.45, 32);
+        ctx.font = "12px sans-serif";
+        ctx.fillText("n1 sin(theta1) = n2 sin(theta2)", width * 0.41, 50);
+        ctx.fillStyle = "rgba(186, 201, 238, 0.85)";
+        ctx.fillText("Incident Ray", width * 0.28, height * 0.14);
+        ctx.fillText("Refracted Ray", width * 0.58, height * 0.62);
+        ctx.fillText("Medium Boundary", width * 0.44, height * 0.53);
       }
 
-      ctx.fillStyle = "rgba(28, 54, 42, 0.72)";
+      ctx.fillStyle = "rgba(182, 200, 235, 0.78)";
       ctx.font = "12px sans-serif";
       ctx.fillText("Drag to rotate view", 12, height - 14);
       raf = window.requestAnimationFrame(draw);
@@ -267,6 +325,7 @@ export default function VisualLab() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [activeVisualization, setActiveVisualization] = useState<TopicVisualization | null>(null);
   const [viewerSpec, setViewerSpec] = useState<VisualizationSpec | null>(null);
+  const [guidedStepIndex, setGuidedStepIndex] = useState(0);
 
   const moduleNames = state ? state.profile.modules : [];
   const moduleName = fromSlugMatch(moduleId || "", moduleNames || []);
@@ -312,6 +371,7 @@ export default function VisualLab() {
   const openVisualization = (visualization: TopicVisualization) => {
     setActiveVisualization(visualization);
     setViewerSpec(cloneSpec(visualization.spec));
+    setGuidedStepIndex(0);
     setViewerOpen(true);
   };
 
@@ -331,7 +391,6 @@ export default function VisualLab() {
       const latest = await fetchTopicVisualizations(moduleName, topicName);
       setSavedVisualizations(latest.visualizations);
       setStatusMessage(`Generated: ${result.extraction.primaryConcept}`);
-      openVisualization(result.visualization);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate visualisation.";
       if (message.toLowerCase().includes("not found") || message.includes("(404)")) {
@@ -351,6 +410,13 @@ export default function VisualLab() {
     }
     return `${selectedDocumentIds.length} documents selected`;
   }, [documents, selectedDocumentIds]);
+
+  const currentGuidedSteps = activeVisualization?.analysis?.guidedSteps || [];
+  const currentStep = currentGuidedSteps[guidedStepIndex] || null;
+  const conditionMet = viewerSpec && currentStep
+    ? parameterConditionMet(viewerSpec, currentStep.focusParameter || "")
+    : false;
+  const prismSnapshot = viewerSpec ? prismPhysicsSnapshot(viewerSpec) : null;
 
   if (loading && !state) return <div className="p-8 text-muted-foreground">Loading Visual Lab...</div>;
   if (error) return <div className="p-8 text-destructive">{error}</div>;
@@ -461,7 +527,7 @@ export default function VisualLab() {
         <div className="bg-card border border-border rounded-lg p-5">
           <h2 className="text-lg font-medium text-foreground mb-4">Saved Visualisations</h2>
           {!savedVisualizations.length && <div className="text-sm text-muted-foreground">No saved visualisations for this topic yet.</div>}
-          <div className="space-y-3">
+              <div className="space-y-3">
             {savedVisualizations.map((viz) => (
               <div key={viz.id} className="border border-border rounded-lg p-3 flex items-center justify-between gap-4">
                 <div className="min-w-0">
@@ -469,11 +535,13 @@ export default function VisualLab() {
                   <div className="text-xs text-muted-foreground mt-1">
                     {new Date(viz.createdAt).toLocaleString()} · {viz.primaryConcept}
                   </div>
-                  {!!viz.promptSummary && <div className="text-xs text-muted-foreground mt-1 truncate">{viz.promptSummary}</div>}
+                  <div className="text-xs text-muted-foreground mt-1 truncate">
+                    {viz.promptSummary || viz.analysis?.learningGoal || "Interactive concept visualisation"}
+                  </div>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => openVisualization(viz)}>
                   <Eye className="w-4 h-4 mr-2" />
-                  Open
+                  Open Visualisation
                 </Button>
               </div>
             ))}
@@ -484,53 +552,30 @@ export default function VisualLab() {
       </div>
 
       {viewerOpen && activeVisualization && viewerSpec && (
-        <div className="fixed inset-4 z-50 bg-card border border-border rounded-xl shadow-xl flex flex-col overflow-hidden">
-          <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+        <div className="fixed inset-2 md:inset-4 z-50 bg-[#020818] border border-[#1A2440] rounded-xl shadow-xl flex flex-col overflow-hidden">
+          <div className="px-5 py-3 border-b border-[#1A2440] bg-[#050F26] flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-sm text-muted-foreground">Interactive Visualisation</div>
-              <div className="text-lg font-medium text-foreground truncate">{activeVisualization.title}</div>
+              <div className="text-xs text-[#90A4D4]">Interactive Visualisation Workspace</div>
+              <div className="text-lg font-medium text-[#EAF0FF] truncate">{activeVisualization.title}</div>
             </div>
             <Button variant="ghost" size="icon" onClick={() => setViewerOpen(false)}>
               <X className="w-4 h-4" />
             </Button>
           </div>
 
-          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_340px]">
-            <div className="p-4 min-h-0">
-              <div className="w-full h-full min-h-[420px]">
-                <VisualSimulationCanvas spec={viewerSpec} />
-              </div>
-            </div>
-
-            <div className="border-t lg:border-t-0 lg:border-l border-border p-4 overflow-auto space-y-4 bg-muted/15">
-              <div className="text-sm font-medium text-foreground">Live Controls</div>
+          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[280px_1fr_340px] bg-[#020818]">
+            <div className="border-b lg:border-b-0 lg:border-r border-[#1A2440] p-4 space-y-4 bg-[#061233]">
+              <div className="text-xs font-semibold tracking-[0.08em] text-[#8FA6DA]">OPTICS CONTROLS</div>
               {viewerSpec.visualizationType === "prism-refraction-3d" ? (
                 <>
-                  <label className="text-xs text-muted-foreground block">
-                    Incident angle: {Math.round(viewerSpec.parameters.incidentAngleDeg)} deg
-                    <input
-                      type="range"
-                      min={5}
-                      max={80}
-                      step={1}
-                      className="w-full mt-1"
-                      value={viewerSpec.parameters.incidentAngleDeg}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, incidentAngleDeg: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-muted-foreground block">
-                    Refractive index: {viewerSpec.parameters.refractiveIndex.toFixed(2)}
+                  <label className="text-xs text-[#C9D5F0] block">
+                    Refractive Index: {viewerSpec.parameters.refractiveIndex.toFixed(2)}
                     <input
                       type="range"
                       min={1}
                       max={2.6}
                       step={0.01}
-                      className="w-full mt-1"
+                      className="w-full mt-1 accent-[#FFD84D]"
                       value={viewerSpec.parameters.refractiveIndex}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -540,14 +585,31 @@ export default function VisualLab() {
                       }}
                     />
                   </label>
-                  <label className="text-xs text-muted-foreground block">
+                  <label className="text-xs text-[#C9D5F0] block">
+                    Incident Angle: {Math.round(viewerSpec.parameters.incidentAngleDeg)} deg
+                    <input
+                      type="range"
+                      min={5}
+                      max={80}
+                      step={1}
+                      className="w-full mt-1 accent-[#FFD84D]"
+                      value={viewerSpec.parameters.incidentAngleDeg}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
+                          ? { ...prev, parameters: { ...prev.parameters, incidentAngleDeg: value } }
+                          : prev));
+                      }}
+                    />
+                  </label>
+                  <label className="text-xs text-[#C9D5F0] block">
                     Wavelength: {Math.round(viewerSpec.parameters.wavelengthNm)} nm
                     <input
                       type="range"
                       min={380}
                       max={700}
                       step={1}
-                      className="w-full mt-1"
+                      className="w-full mt-1 accent-[#FFD84D]"
                       value={viewerSpec.parameters.wavelengthNm}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -557,34 +619,17 @@ export default function VisualLab() {
                       }}
                     />
                   </label>
-                  <label className="text-xs text-muted-foreground block">
-                    Beam intensity: {viewerSpec.parameters.beamIntensity.toFixed(2)}
-                    <input
-                      type="range"
-                      min={0.2}
-                      max={1}
-                      step={0.01}
-                      className="w-full mt-1"
-                      value={viewerSpec.parameters.beamIntensity}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, beamIntensity: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
                 </>
               ) : (
                 <>
-                  <label className="text-xs text-muted-foreground block">
-                    Spring constant: {viewerSpec.parameters.springConstant.toFixed(1)}
+                  <label className="text-xs text-[#C9D5F0] block">
+                    Spring Constant: {viewerSpec.parameters.springConstant.toFixed(1)}
                     <input
                       type="range"
                       min={2}
                       max={120}
                       step={0.5}
-                      className="w-full mt-1"
+                      className="w-full mt-1 accent-[#FFD84D]"
                       value={viewerSpec.parameters.springConstant}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -594,14 +639,14 @@ export default function VisualLab() {
                       }}
                     />
                   </label>
-                  <label className="text-xs text-muted-foreground block">
+                  <label className="text-xs text-[#C9D5F0] block">
                     Mass: {viewerSpec.parameters.mass.toFixed(2)}
                     <input
                       type="range"
                       min={0.2}
                       max={8}
                       step={0.05}
-                      className="w-full mt-1"
+                      className="w-full mt-1 accent-[#FFD84D]"
                       value={viewerSpec.parameters.mass}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -611,31 +656,14 @@ export default function VisualLab() {
                       }}
                     />
                   </label>
-                  <label className="text-xs text-muted-foreground block">
-                    Displacement: {viewerSpec.parameters.displacement.toFixed(2)}
-                    <input
-                      type="range"
-                      min={0.05}
-                      max={1.2}
-                      step={0.01}
-                      className="w-full mt-1"
-                      value={viewerSpec.parameters.displacement}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "spring-mass-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, displacement: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-muted-foreground block">
+                  <label className="text-xs text-[#C9D5F0] block">
                     Damping: {viewerSpec.parameters.damping.toFixed(2)}
                     <input
                       type="range"
                       min={0}
                       max={0.6}
                       step={0.01}
-                      className="w-full mt-1"
+                      className="w-full mt-1 accent-[#FFD84D]"
                       value={viewerSpec.parameters.damping}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -646,6 +674,79 @@ export default function VisualLab() {
                     />
                   </label>
                 </>
+              )}
+            </div>
+
+            <div className="p-2 md:p-4 min-h-0">
+              <div className="w-full h-full min-h-[420px]">
+                <VisualSimulationCanvas spec={viewerSpec} />
+              </div>
+            </div>
+
+            <div className="border-t lg:border-t-0 lg:border-l border-[#1A2440] p-4 overflow-auto space-y-3 bg-[#061233] text-[#D7E2FF]">
+              <div className="text-xs font-semibold tracking-[0.08em] text-[#8FA6DA]">GUIDED INSIGHTS</div>
+              <div className="text-sm font-semibold">{activeVisualization.primaryConcept}</div>
+              <div className="text-xs text-[#A8B8DE]">
+                {activeVisualization.analysis?.learningGoal || "Explore how parameter changes affect the concept in real time."}
+              </div>
+
+              <div className="text-xs text-[#C9D5F0] rounded-md border border-[#1A2440] p-2 bg-[#040E2A]">
+                {viewerSpec.visualizationType === "prism-refraction-3d" && prismSnapshot ? (
+                  <>
+                    <div>Incident: {prismSnapshot.incidentDeg.toFixed(1)} deg</div>
+                    <div>Refracted (approx): {prismSnapshot.refractedDeg.toFixed(1)} deg</div>
+                    <div>n1 to n2: {prismSnapshot.n1.toFixed(2)} to {prismSnapshot.n2.toFixed(2)}</div>
+                  </>
+                ) : (
+                  <>
+                    <div>Spring k: {viewerSpec.parameters.springConstant.toFixed(1)}</div>
+                    <div>Mass: {viewerSpec.parameters.mass.toFixed(2)}</div>
+                    <div>Damping: {viewerSpec.parameters.damping.toFixed(2)}</div>
+                  </>
+                )}
+              </div>
+
+              <div className="text-xs text-[#C9D5F0] rounded-md border border-[#1A2440] p-2 bg-[#040E2A] space-y-1">
+                {viewerSpec.visualizationType === "prism-refraction-3d" ? (
+                  <>
+                    <div>Light bends more toward the normal in denser material.</div>
+                    <div>{prismSnapshot?.tirLikely ? "At this setting, total internal reflection is likely starting." : "Current settings favor refraction-dominant behavior."}</div>
+                  </>
+                ) : (
+                  <>
+                    <div>Higher spring constant increases oscillation frequency.</div>
+                    <div>Higher damping reduces amplitude more quickly.</div>
+                  </>
+                )}
+              </div>
+
+              {currentStep && (
+                <div className="rounded-md border border-[#1A2440] p-3 bg-[#040E2A] space-y-2">
+                  <div className="text-[11px] text-[#8FA6DA]">Step {guidedStepIndex + 1} / {currentGuidedSteps.length || 1}</div>
+                  <div className="text-sm font-medium">{currentStep.title}</div>
+                  <div className="text-xs text-[#B6C4E9]">{currentStep.instruction}</div>
+                  <div className={`text-xs font-medium ${conditionMet ? "text-[#57D18B]" : "text-[#FF7A7A]"}`}>
+                    {conditionMet ? "Condition met" : "Condition not met"}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setGuidedStepIndex((prev) => Math.max(0, prev - 1))}
+                      disabled={guidedStepIndex <= 0}
+                    >
+                      Prev
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setGuidedStepIndex((prev) => Math.min((currentGuidedSteps.length || 1) - 1, prev + 1))}
+                      disabled={guidedStepIndex >= (currentGuidedSteps.length || 1) - 1}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
