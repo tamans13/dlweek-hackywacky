@@ -196,9 +196,9 @@ export default function ModuleDetail() {
   const fallbackReadiness =
     state && state.modules[moduleName]
       ? Math.round(
-          (topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.9 +
-            10,
-        )
+        (topics.reduce((sum, t) => sum + t.masteryPct, 0) / Math.max(1, topics.length)) * 0.9 +
+        10,
+      )
       : 0;
 
   const moduleReadiness = Math.min(100, readinessInfo?.score ?? fallbackReadiness);
@@ -322,9 +322,8 @@ export default function ModuleDetail() {
                                 <button
                                   key={topic.id}
                                   type="button"
-                                  className={`w-full flex items-center gap-2 text-sm rounded-md px-2 py-2 text-left transition-colors ${
-                                    selected ? "bg-primary/10 text-foreground" : "hover:bg-muted text-foreground"
-                                  }`}
+                                  className={`w-full flex items-center gap-2 text-sm rounded-md px-2 py-2 text-left transition-colors ${selected ? "bg-primary/10 text-foreground" : "hover:bg-muted text-foreground"
+                                    }`}
                                   onClick={() => toggleExamTopic(topic.name, !selected)}
                                 >
                                   <Checkbox checked={selected} className="pointer-events-none" />
@@ -356,7 +355,7 @@ export default function ModuleDetail() {
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         {examPlan && predictor && (
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <h3 className="font-medium text-foreground text-lg">AI Exam Predictor</h3>
@@ -369,23 +368,23 @@ export default function ModuleDetail() {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 hover:shadow-xl hover:-translate-y-1.5 hover:scale-[1.06] hover:border-primary/30 transition-all duration-200 cursor-default">
                 <div className="text-xs text-muted-foreground">Risk</div>
                 <div className={`text-sm font-medium ${predictorToneClass}`}>{predictorBandLabel}</div>
               </div>
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 hover:shadow-xl hover:-translate-y-1.5 hover:scale-[1.06] hover:border-primary/30 transition-all duration-200 cursor-default">
                 <div className="text-xs text-muted-foreground">Projected Readiness</div>
                 <div className="text-sm font-medium text-foreground">{predictor.projectedReadiness}%</div>
               </div>
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 hover:shadow-xl hover:-translate-y-1.5 hover:scale-[1.06] hover:border-primary/30 transition-all duration-200 cursor-default">
                 <div className="text-xs text-muted-foreground">Confidence</div>
                 <div className="text-sm font-medium text-foreground">{predictor.confidence}%</div>
               </div>
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 hover:shadow-xl hover:-translate-y-1.5 hover:scale-[1.06] hover:border-primary/30 transition-all duration-200 cursor-default">
                 <div className="text-xs text-muted-foreground">Untested Topics</div>
                 <div className="text-sm font-medium text-foreground">{predictor.untestedTopicCount}</div>
               </div>
-              <div className="rounded-md border border-border p-3">
+              <div className="rounded-md border border-border p-3 hover:shadow-xl hover:-translate-y-1.5 hover:scale-[1.06] hover:border-primary/30 transition-all duration-200 cursor-default">
                 <div className="text-xs text-muted-foreground">Daily Target</div>
                 <div className="text-sm font-medium text-foreground">{predictor.dailyTopicTarget} topic/day</div>
               </div>
@@ -396,7 +395,7 @@ export default function ModuleDetail() {
               <div className="flex flex-wrap gap-2">
                 {predictor.priorityTopics.length ? (
                   predictor.priorityTopics.map((item) => (
-                    <span key={item.topicName} className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-sm text-foreground">
+                    <span key={item.topicName} className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-sm text-foreground hover:shadow-lg hover:-translate-y-1 hover:scale-[1.08] hover:bg-primary/10 hover:border hover:border-primary/30 transition-all duration-200 cursor-default">
                       <span>{item.topicName}</span>
                       <span className="text-xs text-muted-foreground">{item.masteryPct}%</span>
                     </span>
@@ -441,7 +440,7 @@ export default function ModuleDetail() {
               <Link
                 key={topic.id}
                 to={`/dashboard/modules/${toSlug(moduleName)}/topics/${topic.id}`}
-                className="border border-border rounded-lg p-4 hover:bg-muted/50 transition-colors block"
+                className="border border-border rounded-lg p-4 bg-card hover:bg-card hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.03] hover:border-primary/40 transition-all duration-200 block"
               >
                 <div className="flex items-start justify-between mb-3">
                   <h4 className="font-medium text-foreground flex-1">{topic.name}</h4>

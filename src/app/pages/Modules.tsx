@@ -77,7 +77,7 @@ export default function Modules() {
               <Link
                 key={module.id}
                 to={`/dashboard/modules/${module.id}`}
-                className="block bg-card border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all group"
+                className="block bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:border-primary/40 hover:-translate-y-2 hover:scale-[1.03] transition-all duration-200 group"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { MessageCircle, Plus, Send, X } from "lucide-react";
+import { AlertTriangle, MessageCircle, Plus, Send, X } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -13,6 +13,7 @@ import {
   type LearningChatMessage,
 } from "../lib/api";
 import { useAppData } from "../state/AppDataContext";
+import { daysUntil } from "../lib/format";
 
 const WELCOME: LearningChatMessage = {
   role: "assistant",
@@ -57,7 +58,7 @@ function shouldShowBurnoutNudge(moduleName: string, risk: number) {
 
 export default function DinoChat() {
   const navigate = useNavigate();
-  const { state } = useAppData();
+  const { state, readiness } = useAppData();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -70,6 +71,11 @@ export default function DinoChat() {
   const [personaSupportMessage, setPersonaSupportMessage] = useState("");
   const shouldHideWelcomeIntro = Boolean(burnoutSupportMessage || personaSupportMessage);
 
+  // Exam warning notification
+  const EXAM_WARN_KEY = "brainosaur_exam_warn_shown";
+  const [examWarning, setExamWarning] = useState<{ moduleName: string; daysLeft: number; readiness: number } | null>(null);
+  const [examWarnVisible, setExamWarnVisible] = useState(false);
+
   const highestBurnout = useMemo(() => {
     if (!state) return null;
     const entries = Object.entries(state.modules || {}).map(([moduleName, moduleState]) => ({
@@ -81,6 +87,38 @@ export default function DinoChat() {
   }, [state]);
 
   const canSend = useMemo(() => Boolean(input.trim()) && !sending && Boolean(activeSessionId), [input, sending, activeSessionId]);
+
+  // Build exam warning after 4s if there's an urgent exam
+  useEffect(() => {
+    if (!state) return;
+    try {
+      const alreadyShown = sessionStorage.getItem(EXAM_WARN_KEY);
+      if (alreadyShown) return;
+    } catch { /* ignore */ }
+
+    const urgent = Object.entries(state.examPlans)
+      .map(([moduleName, plan]) => {
+        if (!plan?.examDate) return null;
+        const days = daysUntil(plan.examDate);
+        const readinessItem = readiness.find((r) => r.moduleName === moduleName);
+        const score = readinessItem?.score ?? 0;
+        if (days !== null && days >= 0 && days <= 7 && score < 60) {
+          return { moduleName, daysLeft: days, readiness: score };
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a!.daysLeft - b!.daysLeft))[0] ?? null;
+
+    if (!urgent) return;
+
+    const timer = setTimeout(() => {
+      setExamWarning(urgent);
+      setExamWarnVisible(true);
+      try { sessionStorage.setItem(EXAM_WARN_KEY, "1"); } catch { /* ignore */ }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [state, readiness]);
 
   const loadSidebar = async () => {
     const result = await fetchChatSessions();
@@ -231,7 +269,37 @@ export default function DinoChat() {
   };
 
   return (
-    <div className="fixed right-5 bottom-5 z-[60]">
+    <div className="fixed right-5 bottom-5 z-[60] flex flex-col items-end gap-3">
+      {/* Exam warning notification bubble */}
+      {examWarnVisible && examWarning && !open && (
+        <div className="w-[300px] bg-card border border-destructive/40 rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 fade-in duration-300">
+          <div className="flex items-center gap-2 px-4 py-3 bg-destructive/10 border-b border-destructive/20">
+            <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0" />
+            <span className="text-sm font-medium text-destructive flex-1">Dino Alert 🦕</span>
+            <button
+              type="button"
+              onClick={() => setExamWarnVisible(false)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="px-4 py-3">
+            <p className="text-sm text-foreground leading-snug">
+              Rawrr! ⚠️ <span className="font-medium">{examWarning.moduleName}</span> exam is in{" "}
+              <span className="font-medium text-destructive">{examWarning.daysLeft} day{examWarning.daysLeft !== 1 ? "s" : ""}</span>{" "}
+              and you're only <span className="font-medium text-destructive">{examWarning.readiness}% ready</span>. Time to hustle, dino-scholar!
+            </p>
+            <button
+              type="button"
+              onClick={() => { setExamWarnVisible(false); setOpen(true); }}
+              className="mt-3 w-full text-xs font-medium text-primary hover:underline text-left"
+            >
+              Ask Dino for a study plan →
+            </button>
+          </div>
+        </div>
+      )}
       {open ? (
         <div className="w-[360px] sm:w-[760px] h-[560px] bg-card border border-border rounded-2xl shadow-xl flex overflow-hidden">
           <aside className="w-[235px] border-r border-border bg-primary/5 p-2 flex flex-col">
@@ -263,9 +331,8 @@ export default function DinoChat() {
                   type="button"
                   key={session.id}
                   onClick={() => void handleSelectSession(session.id)}
-                  className={`w-full text-left rounded-md px-2 py-2 border ${
-                    session.id === activeSessionId ? "border-primary bg-primary/10" : "border-transparent hover:border-border hover:bg-muted/40"
-                  }`}
+                  className={`w-full text-left rounded-md px-2 py-2 border ${session.id === activeSessionId ? "border-primary bg-primary/10" : "border-transparent hover:border-border hover:bg-muted/40"
+                    }`}
                 >
                   <div className="text-xs font-medium text-foreground truncate">{session.title || "New chat"}</div>
                   <div className="text-[11px] text-muted-foreground truncate">{session.preview || "No messages yet"}</div>
@@ -314,17 +381,16 @@ export default function DinoChat() {
               {messages
                 .filter((msg) => !(shouldHideWelcomeIntro && msg.role === "assistant" && msg.content === WELCOME.content))
                 .map((msg, index) => (
-                <div
-                  key={`${msg.role}-${index}-${msg.content.slice(0, 8)}`}
-                  className={`max-w-[88%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${
-                    msg.role === "user"
+                  <div
+                    key={`${msg.role}-${index}-${msg.content.slice(0, 8)}`}
+                    className={`max-w-[88%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words ${msg.role === "user"
                       ? "ml-auto bg-primary text-primary-foreground"
                       : "bg-muted text-foreground"
-                  }`}
-                >
-                  {msg.content}
-                </div>
-              ))}
+                      }`}
+                  >
+                    {msg.content}
+                  </div>
+                ))}
               {sending && <div className="text-xs text-muted-foreground">Dino is thinking...</div>}
               {error && <div className="text-xs text-destructive">{error}</div>}
             </div>
@@ -351,7 +417,7 @@ export default function DinoChat() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="h-14 px-4 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 flex items-center gap-2"
+          className="h-14 px-4 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.08] transition-all duration-200 flex items-center gap-2"
         >
           <img src="/brainosaur.jpg" alt="Open Dino chat" className="w-7 h-7 rounded-full object-cover border border-primary-foreground/40" />
           <MessageCircle className="w-5 h-5" />

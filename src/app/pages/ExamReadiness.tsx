@@ -117,84 +117,83 @@ export default function ExamReadiness() {
               </div>
             </div>
 
-        {readinessByModule.map((exam) => {
-          const sortedTopics = [...exam.topicsTested].sort((a, b) => {
-            if (a.needsReview !== b.needsReview) return a.needsReview ? -1 : 1;
-            return a.mastery - b.mastery;
-          });
+            {readinessByModule.map((exam) => {
+              const sortedTopics = [...exam.topicsTested].sort((a, b) => {
+                if (a.needsReview !== b.needsReview) return a.needsReview ? -1 : 1;
+                return a.mastery - b.mastery;
+              });
 
-          return (
-            <Link
-              key={exam.moduleId}
-              to={`/dashboard/modules/${exam.moduleId}`}
-              className="block bg-card border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all group"
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <h3 className="text-xl font-medium text-foreground group-hover:text-primary transition-colors mb-2">{exam.moduleName}</h3>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">{exam.examDate ? formatDate(exam.examDate) : "No exam plan yet"}</span>
-                    {exam.daysRemaining !== null && (
-                      <>
-                        <span className="text-sm text-muted-foreground">•</span>
-                        <span className={`text-sm font-medium ${exam.daysRemaining < 20 ? "text-destructive" : "text-foreground"}`}>
-                          {exam.daysRemaining} days remaining
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className={`text-3xl font-medium ${getReadinessColor(exam.readiness)}`}>{exam.readiness}%</div>
-                  <div className="text-sm text-muted-foreground">Ready</div>
-                </div>
-              </div>
-
-              <div className="mb-4">
-                <div className="h-3 bg-muted rounded-full overflow-hidden">
-                  <div className={`h-full transition-all ${getReadinessBgColor(exam.readiness)}`} style={{ width: `${exam.readiness}%` }} />
-                </div>
-              </div>
-
-              <div className="border-t border-border pt-4">
-                <div className="mb-3">
-                  <h4 className="text-sm font-medium text-foreground">Topics Tested</h4>
-                </div>
-                <div className="space-y-2">
-                  {sortedTopics.length === 0 && <div className="text-sm text-muted-foreground">No topics yet.</div>}
-                  {sortedTopics.map((topic, index) => (
-                    <div
-                      key={`${topic.name}-${index}`}
-                      className={`flex items-center justify-between p-3 rounded-lg border ${
-                        topic.needsReview ? "border-destructive/30 bg-destructive/5" : "border-border bg-muted/30"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 flex-1">
-                        {topic.needsReview ? (
-                          <div className="w-5 h-5 rounded-full border-2 border-destructive flex items-center justify-center flex-shrink-0">
-                            <span className="text-xs text-destructive">!</span>
-                          </div>
-                        ) : (
-                          <CheckCircle2 className="w-5 h-5 text-success flex-shrink-0" />
-                        )}
-                        <span className="text-sm font-medium text-foreground">{topic.name}</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className={`text-sm font-medium ${topic.mastery <= 50 ? "text-destructive" : topic.mastery < 80 ? "text-warning" : "text-success"}`}>
-                          {topic.mastery}%
-                        </span>
-                        {topic.needsReview && (
-                          <span className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive font-medium">Needs urgent review</span>
+              return (
+                <Link
+                  key={exam.moduleId}
+                  to={`/dashboard/modules/${exam.moduleId}`}
+                  className="block bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 group"
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-xl font-medium text-foreground group-hover:text-primary transition-colors mb-2">{exam.moduleName}</h3>
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">{exam.examDate ? formatDate(exam.examDate) : "No exam plan yet"}</span>
+                        {exam.daysRemaining !== null && (
+                          <>
+                            <span className="text-sm text-muted-foreground">•</span>
+                            <span className={`text-sm font-medium ${exam.daysRemaining < 20 ? "text-destructive" : "text-foreground"}`}>
+                              {exam.daysRemaining} days remaining
+                            </span>
+                          </>
                         )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </Link>
-          );
-        })}
+                    <div className="text-right">
+                      <div className={`text-3xl font-medium ${getReadinessColor(exam.readiness)}`}>{exam.readiness}%</div>
+                      <div className="text-sm text-muted-foreground">Ready</div>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <div className="h-3 bg-muted rounded-full overflow-hidden">
+                      <div className={`h-full transition-all ${getReadinessBgColor(exam.readiness)}`} style={{ width: `${exam.readiness}%` }} />
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border pt-4">
+                    <div className="mb-3">
+                      <h4 className="text-sm font-medium text-foreground">Topics Tested</h4>
+                    </div>
+                    <div className="space-y-2">
+                      {sortedTopics.length === 0 && <div className="text-sm text-muted-foreground">No topics yet.</div>}
+                      {sortedTopics.map((topic, index) => (
+                        <div
+                          key={`${topic.name}-${index}`}
+                          className={`flex items-center justify-between p-3 rounded-lg border hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.02] transition-all duration-200 ${topic.needsReview ? "border-destructive/30 bg-destructive/5" : "border-border bg-muted/30"
+                            }`}
+                        >
+                          <div className="flex items-center gap-3 flex-1">
+                            {topic.needsReview ? (
+                              <div className="w-5 h-5 rounded-full border-2 border-destructive flex items-center justify-center flex-shrink-0">
+                                <span className="text-xs text-destructive">!</span>
+                              </div>
+                            ) : (
+                              <CheckCircle2 className="w-5 h-5 text-success flex-shrink-0" />
+                            )}
+                            <span className="text-sm font-medium text-foreground">{topic.name}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={`text-sm font-medium ${topic.mastery <= 50 ? "text-destructive" : topic.mastery < 80 ? "text-warning" : "text-success"}`}>
+                              {topic.mastery}%
+                            </span>
+                            {topic.needsReview && (
+                              <span className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive font-medium">Needs urgent review</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
           </>
         )}
       </div>
