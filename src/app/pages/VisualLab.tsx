@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import {
   TopicDocument,
   TopicVisualization,
@@ -168,6 +169,7 @@ function MolecularViewer({ spec }: { spec: Extract<VisualizationSpec, { visualiz
   const displayedAngle = getDisplayedBondAngle(vectors);
   const meta = MOLECULE_META[molecule];
 
+function labelWithTooltip(label: string, content: string) {
   return (
     <Canvas camera={{ position: [0, 0, 6.2], fov: 48 }}>
       <color attach="background" args={["#f4f8ef"]} />
@@ -197,8 +199,69 @@ function MolecularViewer({ spec }: { spec: Extract<VisualizationSpec, { visualiz
   );
 }
 
-function cloneSpec(spec: VisualizationSpec): VisualizationSpec {
-  return JSON.parse(JSON.stringify(spec)) as VisualizationSpec;
+function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
+  const vectorsData = useMemo(
+    () => getMoleculeVectors(spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength),
+    [spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength],
+  );
+
+  const centerAtomRadius = 0.36;
+  const hydrogenAtomRadius = 0.24;
+  const bondRadius = 0.07;
+  const bondLength = spec.parameters.bondLength * 2.2;
+  const atomPositions = vectorsData.vectors.map((v) => new THREE.Vector3(v.x * bondLength, v.y * bondLength, v.z * bondLength));
+  const centerPosition = new THREE.Vector3(0, 0, 0);
+
+  return (
+    <div className="relative w-full h-full rounded-lg border border-[#d8e7cf] bg-card overflow-hidden">
+      <Canvas camera={{ position: [2.9, 2.2, 2.9], fov: 42 }}>
+        <color attach="background" args={["#f6fbf2"]} />
+        <ambientLight intensity={0.68} />
+        <directionalLight position={[4, 5, 4]} intensity={0.95} />
+        <pointLight position={[-3, -2, 5]} intensity={0.45} />
+
+        <mesh position={[0, 0, 0]}>
+          <sphereGeometry args={[centerAtomRadius, 32, 32]} />
+          <meshStandardMaterial color="#e33d3d" roughness={0.5} metalness={0.1} />
+        </mesh>
+
+        {atomPositions.map((to, index) => {
+          const direction = new THREE.Vector3().subVectors(to, centerPosition);
+          const safeDirection = direction.clone().normalize();
+
+          const start = centerPosition.clone().addScaledVector(safeDirection, centerAtomRadius * 0.72);
+          const end = to.clone().addScaledVector(safeDirection, -hydrogenAtomRadius * 0.72);
+          const rod = new THREE.Vector3().subVectors(end, start);
+          const rodLength = Math.max(0.02, rod.length());
+          const midpoint = start.clone().addScaledVector(rod, 0.5);
+          const quaternion = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            safeDirection,
+          );
+
+          return (
+            <group key={index}>
+              <mesh position={midpoint} quaternion={quaternion}>
+                <cylinderGeometry args={[bondRadius, bondRadius, rodLength, 24]} />
+                <meshStandardMaterial color="#d8d8d8" roughness={0.52} metalness={0.1} />
+              </mesh>
+
+              <mesh position={to.toArray()}>
+                <sphereGeometry args={[hydrogenAtomRadius, 32, 32]} />
+                <meshStandardMaterial color="#2f70ff" roughness={0.48} metalness={0.1} />
+              </mesh>
+            </group>
+          );
+        })}
+
+        <OrbitControls enablePan={false} enableZoom zoomSpeed={0.9} minDistance={1.4} maxDistance={12} />
+      </Canvas>
+
+      <div className="absolute left-3 bottom-2 text-[12px] font-semibold text-[#335942] pointer-events-none">
+        Drag to rotate molecule
+      </div>
+    </div>
+  );
 }
 
 function isMolecularSpec(spec: VisualizationSpec): spec is Extract<VisualizationSpec, { visualizationType: "molecular-geometry-vsepr" }> {
