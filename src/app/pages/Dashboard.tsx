@@ -167,7 +167,7 @@ export default function Dashboard() {
     "Time to get your dino-mite brain going! 🦖",
     "Let's make today ex-stinct-ly productive! 💪",
     "Fossil your worries away and study! 📚",
-    "It's time to be a dino-saur of knowledge! 🌟",
+    "It's time to saur with knowledge! 🌟",
   ];
   const dinoPun = useMemo(() => DINO_PUNS[Math.floor(Date.now() / 86400000) % DINO_PUNS.length], []);
 

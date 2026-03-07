@@ -30,10 +30,10 @@ export const brainotypes: Brainotype[] = [
     tagline: "Short Burst Learner",
     image: "/Sprintosaur.png",
     bullets: [
-      "Focus < 40 minutes",
-      "Performs best with practice questions",
+      "Focus < 40 minutes,",
+      "performs best with practice questions",
       "Breaks frequently",
-      "Works well with Pomodoro and flashcards",
+      "Works well with pomodoro and flashcards",
     ],
   },
   {
@@ -42,8 +42,8 @@ export const brainotypes: Brainotype[] = [
     tagline: "Deep Focus Learner",
     image: "/Deeposaur.png",
     bullets: [
-      "Focus endurance 60–90+ minutes",
-      "Low phone distraction",
+      "Focus endurance 60–90+ minutes,",
+      "low phone distraction",
       "Uses teaching/explanation methods",
       "Strong for complex topics",
     ],
@@ -54,8 +54,8 @@ export const brainotypes: Brainotype[] = [
     tagline: "Structured Planner",
     image: "/Methodosaur.png",
     bullets: [
-      "Consistent study schedule",
-      "Uses multiple study methods",
+      "Consistent study schedule,",
+      "uses multiple study methods",
       "Benefits from structured plans",
       "Works well with spaced repetition",
     ],
@@ -66,8 +66,8 @@ export const brainotypes: Brainotype[] = [
     tagline: "Burnout Sensitive",
     image: "/Recoverosaur.png",
     bullets: [
-      "High fatigue before studying",
-      "Performance drops despite study time",
+      "High fatigue before studying,",
+      "performance drops despite study time",
       "Needs recovery and rest cycles",
       "Best with moderate sessions",
     ],
@@ -78,8 +78,8 @@ export const brainotypes: Brainotype[] = [
     tagline: "Adaptive Learner",
     image: "/Flexisaur.png",
     bullets: [
-      "Uses mixed strategies",
-      "Moderate focus endurance",
+      "Uses mixed strategies,",
+      "moderate focus endurance",
       "Switches topics when stuck",
       "Flexible learning style",
     ],
@@ -90,8 +90,8 @@ export const brainotypes: Brainotype[] = [
     tagline: "Late Cognitive Peak",
     image: "/Nightosaur.png",
     bullets: [
-      "Mental sharpness peaks in evening",
-      "Often studies better after 6–10pm",
+      "Mental sharpness peaks in evening,",
+      "often studies better after 6–10pm",
       "Medium to long focus endurance",
       "Works well in quiet night sessions",
     ],
