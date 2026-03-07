@@ -115,6 +115,7 @@ export interface BackendState {
   studySessions: StudySession[];
   tabEvents: TabEvent[];
   quizAttempts: QuizAttempt[];
+  visualizations?: TopicVisualization[];
   examPlans: Record<string, ExamPlan>;
   burnoutTrend?: Array<{
     at: string;
@@ -213,6 +214,48 @@ export interface TopicDocument {
   mimeType: string;
   uploadedAt: string;
   textExtracted: boolean;
+}
+
+export interface PrismVisualizationSpec {
+  visualizationType: "prism-refraction-3d";
+  parameters: {
+    incidentAngleDeg: number;
+    refractiveIndex: number;
+    wavelengthNm: number;
+    prismAngleDeg: number;
+    beamIntensity: number;
+  };
+  notes?: string;
+}
+
+export interface SpringVisualizationSpec {
+  visualizationType: "spring-mass-3d";
+  parameters: {
+    springConstant: number;
+    mass: number;
+    displacement: number;
+    damping: number;
+  };
+  notes?: string;
+}
+
+export type VisualizationSpec = PrismVisualizationSpec | SpringVisualizationSpec;
+
+export interface TopicVisualization {
+  id: string;
+  moduleName: string;
+  topicName: string;
+  title: string;
+  selectedDocumentIds: string[];
+  selectedDocumentNames: string[];
+  primaryConcept: string;
+  userConceptInput: string;
+  userPromptInput: string;
+  promptSummary: string;
+  isPrimary: boolean;
+  spec: VisualizationSpec;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface GeneratedQuizQuestion {
@@ -530,6 +573,32 @@ export function uploadTopicFiles(payload: {
 export function fetchTopicFiles(moduleName: string, topicName: string) {
   const query = new URLSearchParams({ moduleName, topicName }).toString();
   return request<{ documents: TopicDocument[] }>(`/api/topic/files?${query}`);
+}
+
+export function fetchTopicVisualizations(moduleName: string, topicName: string) {
+  const query = new URLSearchParams({ moduleName, topicName }).toString();
+  return request<{ visualizations: TopicVisualization[] }>(`/api/topic/visual-lab?${query}`);
+}
+
+export function generateTopicVisualization(payload: {
+  moduleName: string;
+  topicName: string;
+  selectedDocumentIds: string[];
+  conceptInput: string;
+  promptInput: string;
+}) {
+  return request<{
+    ok: true;
+    visualization: TopicVisualization;
+    selectedDocumentCount: number;
+    extraction: {
+      primaryConcept: string;
+      source: "concept-input" | "selected-documents" | string;
+    };
+  }>("/api/topic/visual-lab/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function generateTopicQuiz(payload: {

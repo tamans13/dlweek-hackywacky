@@ -201,6 +201,7 @@ function emptyState() {
     onboardingPersona: null,
     personaProfile: null,
     topicDocuments: [],
+    visualizations: [],
     generatedQuizzes: [],
     generatedQuizAttempts: [],
     spacedRetryQueue: [],
@@ -242,6 +243,7 @@ function normalizeData(data) {
     onboardingPersona: sanitizePersonaAnalysis(base.onboardingPersona) || null,
     personaProfile: sanitizePersonaProfile(base.personaProfile) || null,
     topicDocuments: Array.isArray(base.topicDocuments) ? base.topicDocuments : [],
+    visualizations: Array.isArray(base.visualizations) ? base.visualizations.map(sanitizeVisualizationRecord).filter(Boolean) : [],
     generatedQuizzes: Array.isArray(base.generatedQuizzes) ? base.generatedQuizzes : [],
     generatedQuizAttempts: Array.isArray(base.generatedQuizAttempts) ? base.generatedQuizAttempts : [],
     spacedRetryQueue: Array.isArray(base.spacedRetryQueue) ? base.spacedRetryQueue : [],
@@ -1735,6 +1737,79 @@ function sanitizePersonaProfile(raw) {
     updatedAt,
     source,
     evidenceSnapshot,
+  };
+}
+
+const VISUALIZATION_TYPES = new Set(['prism-refraction-3d', 'spring-mass-3d']);
+
+function sanitizeVisualizationSpec(raw) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  const type = VISUALIZATION_TYPES.has(String(input.visualizationType || '').trim())
+    ? String(input.visualizationType || '').trim()
+    : 'prism-refraction-3d';
+  const paramsRaw = input.parameters && typeof input.parameters === 'object' ? input.parameters : {};
+
+  if (type === 'spring-mass-3d') {
+    return {
+      visualizationType: type,
+      parameters: {
+        springConstant: clamp(Number(paramsRaw.springConstant || 18), 2, 120),
+        mass: clamp(Number(paramsRaw.mass || 1.2), 0.2, 8),
+        displacement: clamp(Number(paramsRaw.displacement || 0.35), 0.05, 1.2),
+        damping: clamp(Number(paramsRaw.damping || 0.08), 0, 0.6),
+      },
+      notes: String(input.notes || '').trim(),
+    };
+  }
+
+  return {
+    visualizationType: 'prism-refraction-3d',
+    parameters: {
+      incidentAngleDeg: clamp(Number(paramsRaw.incidentAngleDeg || 35), 5, 80),
+      refractiveIndex: clamp(Number(paramsRaw.refractiveIndex || 1.52), 1, 2.6),
+      wavelengthNm: clamp(Number(paramsRaw.wavelengthNm || 540), 380, 700),
+      prismAngleDeg: clamp(Number(paramsRaw.prismAngleDeg || 60), 35, 75),
+      beamIntensity: clamp(Number(paramsRaw.beamIntensity || 0.85), 0.2, 1),
+    },
+    notes: String(input.notes || '').trim(),
+  };
+}
+
+function sanitizeVisualizationRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = String(raw.id || '').trim();
+  const moduleName = String(raw.moduleName || '').trim();
+  const topicName = String(raw.topicName || '').trim();
+  const primaryConcept = String(raw.primaryConcept || '').trim();
+  if (!id || !moduleName || !topicName || !primaryConcept) return null;
+
+  const selectedDocumentIds = Array.isArray(raw.selectedDocumentIds)
+    ? Array.from(new Set(raw.selectedDocumentIds.map((x) => String(x || '').trim()).filter(Boolean))).slice(0, 20)
+    : [];
+  const selectedDocumentNames = Array.isArray(raw.selectedDocumentNames)
+    ? Array.from(new Set(raw.selectedDocumentNames.map((x) => String(x || '').trim()).filter(Boolean))).slice(0, 20)
+    : [];
+
+  const createdAtRaw = String(raw.createdAt || '').trim();
+  const updatedAtRaw = String(raw.updatedAt || '').trim();
+  const createdAt = Number.isFinite(new Date(createdAtRaw).getTime()) ? new Date(createdAtRaw).toISOString() : nowIso();
+  const updatedAt = Number.isFinite(new Date(updatedAtRaw).getTime()) ? new Date(updatedAtRaw).toISOString() : createdAt;
+
+  return {
+    id,
+    moduleName,
+    topicName,
+    title: String(raw.title || `${primaryConcept} Visualisation`).trim() || `${primaryConcept} Visualisation`,
+    selectedDocumentIds,
+    selectedDocumentNames,
+    primaryConcept,
+    userConceptInput: String(raw.userConceptInput || '').trim(),
+    userPromptInput: String(raw.userPromptInput || '').trim(),
+    promptSummary: String(raw.promptSummary || '').trim(),
+    isPrimary: Boolean(raw.isPrimary),
+    spec: sanitizeVisualizationSpec(raw.spec),
+    createdAt,
+    updatedAt,
   };
 }
 
@@ -3252,6 +3327,129 @@ async function syncTopicDocumentSummaries(userId, data, moduleNameFilter = null,
   }
 }
 
+function visualizeConceptCandidates() {
+  return [
+    { concept: "Hooke's Law", terms: ['hooke', 'spring constant', 'elastic', 'oscillation', 'harmonic'] },
+    { concept: "Refraction Through a Prism", terms: ['snell', 'refraction', 'prism', 'refractive index', 'dispersion', 'wavelength'] },
+    { concept: 'Circuit Dynamics', terms: ['voltage', 'current', 'resistor', 'capacitor', 'inductor', 'circuit'] },
+    { concept: 'Projectile Motion', terms: ['trajectory', 'projectile', 'velocity', 'acceleration', 'gravity'] },
+    { concept: 'Supply and Demand Equilibrium', terms: ['demand', 'supply', 'equilibrium', 'price elasticity', 'market'] },
+  ];
+}
+
+function buildPrimaryVisualConcept(selectedDocs, conceptInput, promptInput) {
+  const fromInput = String(conceptInput || '').trim();
+  if (fromInput) return shortText(fromInput, 80);
+
+  const textPool = [
+    String(promptInput || ''),
+    ...selectedDocs.map((doc) => String(doc.fileName || '')),
+    ...selectedDocs.map((doc) => String(doc.extractedText || '').slice(0, 12000)),
+  ].join('\n').toLowerCase();
+
+  const candidates = visualizeConceptCandidates();
+  let best = { concept: '', score: 0 };
+  for (const candidate of candidates) {
+    const score = candidate.terms.reduce((sum, term) => {
+      if (!term) return sum;
+      return sum + (textPool.includes(term.toLowerCase()) ? 1 : 0);
+    }, 0);
+    if (score > best.score) best = { concept: candidate.concept, score };
+  }
+  if (best.score > 0) return best.concept;
+
+  const tokenCounts = {};
+  for (const token of textPool.split(/[^a-z0-9]+/)) {
+    const word = token.trim();
+    if (!word || word.length < 5 || GROUNDING_STOPWORDS.has(word)) continue;
+    tokenCounts[word] = (tokenCounts[word] || 0) + 1;
+  }
+  const topToken = Object.entries(tokenCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  if (topToken) return `${topToken.slice(0, 1).toUpperCase()}${topToken.slice(1)} Concept`;
+  return 'Refraction Through a Prism';
+}
+
+function buildVisualizationSpecFromConcept(primaryConcept, promptInput = '') {
+  const lower = `${String(primaryConcept || '')} ${String(promptInput || '')}`.toLowerCase();
+  if (
+    lower.includes('hooke')
+    || lower.includes('spring')
+    || lower.includes('oscillat')
+    || lower.includes('elastic')
+  ) {
+    return sanitizeVisualizationSpec({
+      visualizationType: 'spring-mass-3d',
+      parameters: {
+        springConstant: 24,
+        mass: 1.2,
+        displacement: 0.45,
+        damping: 0.08,
+      },
+      notes: 'Interactive spring-mass system for Hooke-style behavior.',
+    });
+  }
+
+  return sanitizeVisualizationSpec({
+    visualizationType: 'prism-refraction-3d',
+    parameters: {
+      incidentAngleDeg: 35,
+      refractiveIndex: 1.52,
+      wavelengthNm: 540,
+      prismAngleDeg: 60,
+      beamIntensity: 0.9,
+    },
+    notes: 'Triangular prism simulation for refraction, dispersion, and internal reflection.',
+  });
+}
+
+function listTopicVisualizations(moduleName, topicName, data) {
+  const list = Array.isArray(data.visualizations) ? data.visualizations : [];
+  return list
+    .map(sanitizeVisualizationRecord)
+    .filter(Boolean)
+    .filter((item) => item.moduleName === moduleName && item.topicName === topicName)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function removeTopicVisualizations(moduleName, topicName, data) {
+  if (!Array.isArray(data.visualizations)) data.visualizations = [];
+  data.visualizations = data.visualizations
+    .map(sanitizeVisualizationRecord)
+    .filter(Boolean)
+    .filter((item) => !(item.moduleName === moduleName && item.topicName === topicName));
+}
+
+function createTopicVisualization(payload, data) {
+  if (!Array.isArray(data.visualizations)) data.visualizations = [];
+  const now = nowIso();
+  const normalized = sanitizeVisualizationRecord({
+    id: randomId('viz'),
+    moduleName: payload.moduleName,
+    topicName: payload.topicName,
+    title: payload.title,
+    selectedDocumentIds: payload.selectedDocumentIds || [],
+    selectedDocumentNames: payload.selectedDocumentNames || [],
+    primaryConcept: payload.primaryConcept,
+    userConceptInput: payload.userConceptInput || '',
+    userPromptInput: payload.userPromptInput || '',
+    promptSummary: payload.promptSummary || '',
+    isPrimary: true,
+    spec: payload.spec,
+    createdAt: now,
+    updatedAt: now,
+  });
+  if (!normalized) throw new Error('Failed to normalize visualization payload.');
+
+  data.visualizations = data.visualizations
+    .map(sanitizeVisualizationRecord)
+    .filter(Boolean)
+    .map((item) => (item.moduleName === normalized.moduleName && item.topicName === normalized.topicName
+      ? { ...item, isPrimary: false }
+      : item));
+  data.visualizations.push(normalized);
+  return normalized;
+}
+
 async function deleteTopicDocuments(userId, moduleName, topicName, data) {
   if (!SUPABASE_ENABLED) {
     data.topicDocuments = data.topicDocuments.filter((x) => !(x.moduleName === moduleName && x.topicName === topicName));
@@ -4514,6 +4712,7 @@ async function deleteModuleResources(userId, moduleName, data) {
     await deleteTopicDocuments(userId, moduleName, topicName, data);
     await deleteTopicQuizzes(userId, moduleName, topicName, data);
   }
+  data.visualizations = (data.visualizations || []).filter((x) => x.moduleName !== moduleName);
 
   if (SUPABASE_ENABLED) {
     const docParams = new URLSearchParams({
@@ -4558,6 +4757,7 @@ async function deleteModuleResources(userId, moduleName, data) {
   }
 
   data.topicDocuments = data.topicDocuments.filter((x) => x.moduleName !== moduleName);
+  data.visualizations = (data.visualizations || []).filter((x) => x.moduleName !== moduleName);
   data.generatedQuizAttempts = data.generatedQuizAttempts.filter((x) => x.moduleName !== moduleName);
   data.generatedQuizzes = data.generatedQuizzes.filter((x) => x.moduleName !== moduleName);
   data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => x.moduleName !== moduleName);
@@ -4918,6 +5118,7 @@ async function apiHandler(req, res, parsedUrl) {
     data.studySessions = data.studySessions.filter((x) => allowed.has(x.moduleName));
     data.tabEvents = data.tabEvents.filter((x) => allowed.has(x.moduleName));
     data.quizAttempts = data.quizAttempts.filter((x) => allowed.has(x.moduleName));
+    data.visualizations = (data.visualizations || []).filter((x) => allowed.has(x.moduleName));
     data.spacedRetryQueue = (data.spacedRetryQueue || []).filter((x) => allowed.has(x.moduleName));
     data.spacedReviewRuns = (data.spacedReviewRuns || []).filter((x) => allowed.has(x.moduleName));
 
@@ -4995,6 +5196,7 @@ async function apiHandler(req, res, parsedUrl) {
     data.quizAttempts = data.quizAttempts.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.studySessions = data.studySessions.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
     data.tabEvents = data.tabEvents.filter((x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName));
+    removeTopicVisualizations(body.moduleName, body.topicName, data);
     data.spacedRetryQueue = (data.spacedRetryQueue || []).filter(
       (x) => !(x.moduleName === body.moduleName && x.topicName === body.topicName),
     );
@@ -5215,6 +5417,74 @@ async function apiHandler(req, res, parsedUrl) {
         uploadedAt: doc.uploadedAt,
         textExtracted: Boolean(doc.extractedText),
       })),
+    });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/topic/visual-lab') {
+    const moduleName = String(parsedUrl.searchParams.get('moduleName') || '').trim();
+    const topicName = String(parsedUrl.searchParams.get('topicName') || '').trim();
+    if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName query params are required' });
+
+    const visualizations = listTopicVisualizations(moduleName, topicName, data);
+    return send(res, 200, {
+      visualizations,
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/topic/visual-lab/generate') {
+    const body = await parseBody(req);
+    const moduleName = String(body.moduleName || '').trim();
+    const topicName = String(body.topicName || '').trim();
+    const conceptInput = String(body.conceptInput || '').trim();
+    const promptInput = String(body.promptInput || '').trim();
+    const selectedDocumentIds = Array.isArray(body.selectedDocumentIds)
+      ? Array.from(new Set(body.selectedDocumentIds.map((x) => String(x || '').trim()).filter(Boolean))).slice(0, 20)
+      : [];
+
+    if (!moduleName || !topicName) return send(res, 400, { error: 'moduleName and topicName are required' });
+
+    const mod = moduleState(data, moduleName);
+    topicState(mod, topicName);
+
+    const documents = await listTopicDocuments(user.id, moduleName, topicName, data);
+    const selectedDocuments = selectedDocumentIds.length
+      ? documents.filter((doc) => selectedDocumentIds.includes(String(doc.id)))
+      : [];
+    if (selectedDocumentIds.length && !selectedDocuments.length) {
+      return send(res, 400, { error: 'Selected documents were not found for this topic. Refresh and try again.' });
+    }
+
+    const docsWithText = selectedDocuments.filter((doc) => String(doc.extractedText || '').trim().length > 0);
+
+    const primaryConcept = buildPrimaryVisualConcept(docsWithText, conceptInput, promptInput);
+    const spec = buildVisualizationSpecFromConcept(primaryConcept, promptInput);
+    const promptSummary = shortText(promptInput || `Interactive visual for ${primaryConcept}`, 140);
+
+    const visualization = createTopicVisualization(
+      {
+        moduleName,
+        topicName,
+        title: `${primaryConcept} Visualisation`,
+        selectedDocumentIds: docsWithText.map((doc) => doc.id),
+        selectedDocumentNames: docsWithText.map((doc) => doc.fileName),
+        primaryConcept,
+        userConceptInput: conceptInput,
+        userPromptInput: promptInput,
+        promptSummary,
+        spec,
+      },
+      data,
+    );
+
+    await saveDataForUser(user.id, data);
+    return send(res, 200, {
+      ok: true,
+      visualization,
+      selectedDocumentCount: docsWithText.length,
+      extraction: {
+        primaryConcept,
+        source: conceptInput ? 'concept-input' : docsWithText.length ? 'selected-documents' : 'prompt-input',
+      },
     });
   }
 

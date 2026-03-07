@@ -62,6 +62,10 @@ export const router = createBrowserRouter([
         const { default: TopicDetail } = await import("./pages/TopicDetail");
         return { Component: TopicDetail };
       }},
+      { path: "modules/:moduleId/topics/:topicId/visual-lab", lazy: async () => {
+        const { default: VisualLab } = await import("./pages/VisualLab");
+        return { Component: VisualLab };
+      }},
       { path: "modules/:moduleId/topics/:topicId/spaced-review", lazy: async () => {
         const { default: SpacedReviewSession } = await import("./pages/SpacedReviewSession");
         return { Component: SpacedReviewSession };
