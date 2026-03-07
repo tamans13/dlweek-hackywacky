@@ -1,6 +1,8 @@
 import { AlertCircle, TrendingUp, Info, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { avg } from "../lib/format";
+import { toSlug } from "../lib/ids";
 import { useAppData } from "../state/AppDataContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
@@ -297,7 +299,7 @@ export default function Dashboard() {
   const eventClasses = (type: CalendarEventType) =>
     type === "exam"
       ? "bg-orange-300 text-black"
-      : "bg-blue-100 text-blue-800";
+      : "bg-amber-800/20 text-amber-900 border border-amber-700/30";
 
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading dashboard...</div>;
@@ -542,9 +544,17 @@ export default function Dashboard() {
             {!activeDayEvents.length && <p className="text-sm text-muted-foreground">No events for this day.</p>}
             {activeDayEvents.map((event) => (
               <div key={event.id} className="flex items-center justify-between border border-border rounded-md px-3 py-2">
-                <span className="text-sm text-foreground">
-                  {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : event.moduleName}
-                </span>
+                {event.type === "spacedRep" && event.topicName ? (
+                  <Link
+                    to={`/dashboard/modules/${toSlug(event.moduleName)}/topics/${toSlug(event.topicName)}`}
+                    onClick={() => setSelectedDayKey(null)}
+                    className="text-sm text-foreground hover:text-primary hover:underline transition-colors font-medium"
+                  >
+                    {event.topicName} <span className="text-muted-foreground font-normal">({event.moduleName})</span>
+                  </Link>
+                ) : (
+                  <span className="text-sm text-foreground">{event.moduleName}</span>
+                )}
                 <span className={`text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}>{event.type === "exam" ? "Exam" : "Spaced Rep"}</span>
               </div>
             ))}
