@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
+import { Eye, Ear, BookOpen, Hand } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
 import { brainotypeById, brainotypes } from "../lib/brainotypes";
 import {
@@ -11,35 +12,39 @@ import { readOnboardingPersona } from "../lib/onboardingPersona";
 
 const varkStyles = [
   {
+    icon: Eye,
     name: "Visual",
     bullets: [
-      "Learns best using diagrams, charts, and visual summaries",
-      "Benefits from mind maps and structured notes",
-      "Color-coding helps understanding",
+      "• Learns best using diagrams, charts, and visual summaries",
+      "• Benefits from mind maps and structured notes",
+      "• Color-coding helps understanding",
     ],
   },
   {
+    icon: Ear,
     name: "Auditory",
     bullets: [
-      "Learns best through listening and discussion",
-      "Benefits from lectures and verbal explanation",
-      "Explaining ideas aloud improves retention",
+      "• Learns best through listening and discussion",
+      "• Benefits from lectures and verbal explanation",
+      "• Explaining ideas aloud improves retention",
     ],
   },
   {
+    icon: BookOpen,
     name: "Reading/Writing",
     bullets: [
-      "Learns best through text-based input and output",
-      "Benefits from reading explanations and writing summaries",
-      "Rewriting notes improves understanding",
+      "• Learns best through text-based input and output",
+      "• Benefits from reading explanations and writing summaries",
+      "• Rewriting notes improves understanding",
     ],
   },
   {
+    icon: Hand,
     name: "Kinesthetic",
     bullets: [
-      "Learns best through doing and hands-on interaction",
-      "Benefits from practice questions and experiments",
-      "Active engagement improves retention",
+      "• Learns best through doing and hands-on interaction",
+      "• Benefits from practice questions and experiments",
+      "• Active engagement improves retention",
     ],
   },
 ];
@@ -118,35 +123,28 @@ export default function BrainotypePage() {
 
           {primaryBrainotype ? (
             <div className="overflow-hidden rounded-[28px] border border-border bg-background/40 shadow-sm">
-              <div className="grid md:grid-cols-[1fr_1fr]">
-                <div className="min-h-[280px]">
+              <div className="grid md:grid-cols-[3fr_2fr]">
+                <div className="min-h-[380px]">
                   <img
                     src={primaryBrainotype.image}
                     alt={`${primaryBrainotype.name} dinosaur`}
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <div className="flex flex-col justify-between gap-4 p-6">
-                  <div>
+                <div className="flex flex-col justify-center gap-8 p-8">
+                  <div className="space-y-1">
                     <div className="text-3xl font-semibold text-foreground">{primaryBrainotype.name}</div>
-                    <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">{primaryBrainotype.tagline}</p>
-                    <p className="mt-2 text-sm text-muted-foreground">
+                    <p className="text-base font-semibold text-foreground">{primaryBrainotype.tagline}</p>
+                    <p className="text-sm text-muted-foreground">
                       {primaryBrainotype.bullets[0]} {primaryBrainotype.bullets[1]}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">Learning Style</p>
-                    <div className="text-lg font-semibold text-foreground">{learningStyleLabel}</div>
+                  <div className="space-y-1">
+                    <div className="text-3xl font-semibold text-foreground">{learningStyleLabel}</div>
                     {learningStyleDescription && (
                       <p className="text-sm text-muted-foreground">{learningStyleDescription}</p>
                     )}
                   </div>
-                  {secondaryBrainotype && (
-                    <p className="text-sm text-muted-foreground">
-                      Secondary tendency:&nbsp;
-                      <span className="font-semibold text-foreground">{secondaryBrainotype.name}</span> — {secondaryBrainotype.tagline}
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
@@ -318,18 +316,19 @@ export default function BrainotypePage() {
 
           <div className="border-t border-border pt-8 space-y-6">
             <div className="space-y-2">
-              <h2 className="text-2xl font-semibold text-foreground">Understanding the full framework</h2>
+              <h2 className="text-2xl font-semibold text-foreground">Learning Styles (VARK)</h2>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {varkStyles.map((style) => (
                 <article
                   key={style.name}
-                  className="rounded-2xl border border-border bg-background/60 p-6 text-center hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default"
+                  className="flex flex-col items-center gap-2 rounded-2xl border border-border bg-white/60 px-5 py-6 text-center shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-lg"
                 >
+                  <style.icon className="text-gray-900" size={34} />
                   <div className="text-lg font-semibold text-foreground">{style.name}</div>
-                  <ul className="mt-3 space-y-2 pl-5 text-left text-sm text-muted-foreground">
+                  <ul className="mt-1 space-y-1 text-center text-sm text-muted-foreground list-none">
                     {style.bullets.map((bullet) => (
-                      <li key={`${style.name}-${bullet}`} className="list-disc">
+                      <li key={`${style.name}-${bullet}`}>
                         {bullet}
                       </li>
                     ))}
