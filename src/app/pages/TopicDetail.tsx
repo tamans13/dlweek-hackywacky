@@ -537,7 +537,7 @@ export default function TopicDetail() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
           <div className="flex items-center justify-between gap-4 mb-3">
             <h3 className="font-medium text-foreground text-lg">Topic Study Session</h3>
             <div className="flex flex-col items-end gap-2">
@@ -578,7 +578,7 @@ export default function TopicDetail() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
             <div className="flex items-center gap-2 mb-4">
               <FileText className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground text-lg">Topic Documents</h3>
@@ -600,7 +600,7 @@ export default function TopicDetail() {
               {resourceLoading && <div className="text-sm text-muted-foreground">Loading documents...</div>}
               {!resourceLoading && !documents.length && <div className="text-sm text-muted-foreground">No uploaded documents for this topic yet.</div>}
               {documents.map((doc) => (
-                <div key={doc.id} className="border border-border rounded-lg p-3">
+                <div key={doc.id} className="border border-border rounded-lg p-3 hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                   <div className="font-medium text-sm text-foreground truncate">{doc.fileName}</div>
                   <div className="text-xs text-muted-foreground mt-1">
                     Uploaded {new Date(doc.uploadedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {doc.mimeType}
@@ -614,7 +614,7 @@ export default function TopicDetail() {
           </div>
 
           <div className="space-y-5">
-            <div className="bg-card border border-border rounded-lg p-5">
+            <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
               <div className="flex items-center gap-2 mb-4">
                 <Calendar className="w-5 h-5 text-primary" />
                 <h3 className="font-medium text-foreground text-lg">Spaced Repetition Revision</h3>
@@ -630,7 +630,7 @@ export default function TopicDetail() {
             </div>
 
             {hasCompletedTopicSession && (
-              <div className="bg-card border border-border rounded-lg p-5">
+              <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="w-5 h-5 text-primary" />
                   <h3 className="font-medium text-foreground text-lg">AI Quiz Generator</h3>
@@ -655,7 +655,7 @@ export default function TopicDetail() {
                     const completed = quiz.attemptCount > 0;
                     const difficulty = formatDifficultyLabel(quiz.difficultyPlan?.difficulty);
                     return (
-                      <div key={quiz.id} className="w-full border rounded-lg p-3 border-border">
+                      <div key={quiz.id} className="w-full border rounded-lg p-3 border-border hover:shadow-lg hover:-translate-y-1 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                         <div className="flex items-center justify-between gap-3">
                           <div className="font-medium text-sm text-foreground truncate">{quiz.title}</div>
                           <span className="text-[11px] px-2 py-1 rounded bg-muted text-muted-foreground whitespace-nowrap">Difficulty: {difficulty}</span>
@@ -700,7 +700,7 @@ export default function TopicDetail() {
         {resourceError && <div className="text-sm text-destructive">{resourceError}</div>}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
             <div className="flex items-center gap-2 mb-4">
               <TrendingDown className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground text-lg">Mastery Trend</h3>
@@ -722,7 +722,7 @@ export default function TopicDetail() {
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
             <div className="flex items-center gap-2 mb-4">
               <Calendar className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground text-lg">1-Month Predicted Mastery</h3>
@@ -749,7 +749,7 @@ export default function TopicDetail() {
             </ResponsiveContainer>
           </div>
 
-          <div className="bg-card border border-border rounded-lg p-5 md:col-span-2">
+          <div className="bg-card border border-border rounded-lg p-5 md:col-span-2 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
             <div className="flex items-center gap-2 mb-4">
               <AlertCircle className="w-5 h-5 text-primary" />
               <h3 className="font-medium text-foreground text-lg">Specific Weaknesses</h3>
@@ -759,7 +759,7 @@ export default function TopicDetail() {
                 <div className="text-sm text-muted-foreground">Analyzing quiz mistakes...</div>
               ) : (
                 weaknesses.map((weakness, index) => (
-                  <div key={index} className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20 rounded-lg">
+                  <div key={index} className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20 rounded-lg hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] transition-all duration-200">
                     <div className="w-1.5 h-1.5 rounded-full bg-destructive mt-2 flex-shrink-0" />
                     <p className="text-sm text-foreground">{weakness}</p>
                   </div>
@@ -769,7 +769,7 @@ export default function TopicDetail() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
           <div className="flex items-center gap-2 mb-4">
             <CheckCircle className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Quiz Performance History</h3>
@@ -777,7 +777,7 @@ export default function TopicDetail() {
           <div className="space-y-3">
             {!attempts.length && <div className="text-sm text-muted-foreground">No quiz attempts yet for this topic.</div>}
             {attempts.map((quiz) => (
-              <div key={quiz.id} className="flex items-center justify-between p-4 border border-border rounded-lg">
+              <div key={quiz.id} className="flex items-center justify-between p-4 border border-border rounded-lg hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                 <div className="flex-1">
                   <div className="font-medium text-foreground">{topicName} Quiz</div>
                   <div className="text-sm text-muted-foreground">
@@ -795,7 +795,7 @@ export default function TopicDetail() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
           <div className="flex items-center gap-2 mb-4">
             <Calendar className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Topic Schedule</h3>
@@ -804,7 +804,7 @@ export default function TopicDetail() {
           <div className="mb-6">
             <h4 className="text-sm font-medium text-muted-foreground mb-3">Upcoming Reviews</h4>
             <div className="space-y-2">
-              <div className="flex items-center gap-3 p-3 border border-border rounded-lg">
+              <div className="flex items-center gap-3 p-3 border border-border rounded-lg hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                 <div className="text-sm font-medium text-muted-foreground w-24 flex-shrink-0">
                   {new Date(topic.nextReviewAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                 </div>
@@ -812,7 +812,7 @@ export default function TopicDetail() {
                 <div className="font-medium text-foreground">Reminder to do your flashcards!</div>
               </div>
               {state?.examPlans[moduleName] && (
-                <div className="flex items-center gap-3 p-3 border border-border rounded-lg">
+                <div className="flex items-center gap-3 p-3 border border-border rounded-lg hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                   <div className="text-sm font-medium text-muted-foreground w-24 flex-shrink-0">
                     {new Date(state.examPlans[moduleName].examDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                   </div>
@@ -828,7 +828,7 @@ export default function TopicDetail() {
             <div className="space-y-2">
               {!studySessions.length && <div className="text-sm text-muted-foreground">No completed study sessions yet.</div>}
               {studySessions.map((session, index) => (
-                <div key={`${session.date}-${index}`} className="flex items-center justify-between p-3 border border-border rounded-lg">
+                <div key={`${session.date}-${index}`} className="flex items-center justify-between p-3 border border-border rounded-lg hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200">
                   <div className="text-sm font-medium text-foreground">{session.date}</div>
                   <div className="text-sm text-muted-foreground">{session.duration}</div>
                 </div>

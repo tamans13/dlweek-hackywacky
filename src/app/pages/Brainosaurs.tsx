@@ -165,11 +165,11 @@ export default function BrainotypePage() {
               </p>
             </div>
             <div className="grid gap-4 lg:grid-cols-2">
-              <article className="rounded-2xl border border-border bg-background/60 p-6">
+              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
                 <h3 className="text-sm font-semibold text-foreground">What we notice about your study style</h3>
                 <p className="mt-3 text-sm text-muted-foreground">{observation}</p>
               </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6">
+              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
                 <h3 className="text-sm font-semibold text-foreground">What works well for you</h3>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {primaryBrainotype
@@ -187,7 +187,7 @@ export default function BrainotypePage() {
                   )}
                 </ul>
               </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6">
+              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
                 <h3 className="text-sm font-semibold text-foreground">Potential challenges</h3>
                 <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                   <li>
@@ -204,7 +204,7 @@ export default function BrainotypePage() {
                   </li>
                 </ul>
               </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6">
+              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
                 <h3 className="text-sm font-semibold text-foreground">Suggestions to improve</h3>
                 <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                   {suggestionTechniques.map((technique) => (
@@ -229,9 +229,10 @@ export default function BrainotypePage() {
               {brainotypes.map((type) => (
                 <article
                   key={type.name}
-                  className={`flex h-full flex-col items-center gap-3 rounded-3xl border text-center p-4 transition-all duration-200 ${
-                    primaryBrainotype?.id === type.id ? "border-primary/60 shadow-lg" : "border-border hover:border-primary/30"
-                  }`}
+                  className={`flex h-full flex-col items-center gap-3 rounded-3xl border text-center p-4 transition-all duration-200 ${primaryBrainotype?.id === type.id
+                      ? "border-primary/60 shadow-lg hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02]"
+                      : "border-border hover:border-primary/40 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02]"
+                    }`}
                 >
                   <div className="h-40 w-full overflow-hidden rounded-3xl bg-muted/30">
                     <img
@@ -265,7 +266,7 @@ export default function BrainotypePage() {
               {varkStyles.map((style) => (
                 <article
                   key={style.name}
-                  className="rounded-2xl border border-border bg-background/60 p-6 text-center"
+                  className="rounded-2xl border border-border bg-background/60 p-6 text-center hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default"
                 >
                   <div className="text-lg font-semibold text-foreground">{style.name}</div>
                   <ul className="mt-3 mx-auto max-w-[220px] space-y-2 text-left text-sm text-muted-foreground">
