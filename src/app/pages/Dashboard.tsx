@@ -298,8 +298,8 @@ export default function Dashboard() {
 
   const eventClasses = (type: CalendarEventType) =>
     type === "exam"
-      ? "bg-orange-300 text-black"
-      : "bg-amber-800/20 text-amber-900 border border-amber-700/30";
+      ? "bg-orange-300/80 text-orange-950 border border-orange-400/50"
+      : "bg-blue-500/20 text-blue-900 border border-blue-500/40";
 
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading dashboard...</div>;
