@@ -180,9 +180,12 @@ export default function Profile() {
 
         <div className="bg-card border border-border rounded-lg p-6">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Brainosaur Type</p>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Brainotype</p>
             <p className="text-lg font-semibold text-foreground">{primaryBrainotype?.name || "Not set"}</p>
-            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Learning Style</p>
+            {primaryBrainotype && (
+              <p className="text-sm text-muted-foreground">{primaryBrainotype.tagline}</p>
+            )}
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Learning Style (VARK)</p>
             <p className="text-lg font-semibold text-foreground">{learningStyleLabel}</p>
           </div>
         </div>

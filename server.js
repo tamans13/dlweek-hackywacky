@@ -36,6 +36,22 @@ const MIN_DECAY_PER_DAY = 2;
 const MAX_DECAY_PER_DAY = 15;
 const DEFAULT_DECAY_PER_DAY = 6;
 
+const BRAINOTYPE_NAMES = {
+  sprintosaur: "Sprintosaur",
+  deeposaur: "Deeposaur",
+  methodosaur: "Methodosaur",
+  recoverosaur: "Recoverosaur",
+  flexisaur: "Flexisaur",
+  nightosaur: "Nightosaur",
+};
+
+const LEARNING_STYLE_NAMES = {
+  visual: "Visual Learner",
+  auditory: "Auditory Learner",
+  readingWriting: "Reading/Writing Learner",
+  kinesthetic: "Kinesthetic Learner",
+};
+
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -1628,18 +1644,21 @@ async function buildOnboardingPersonaWithOpenAI(payload) {
 
   try {
     const humanizedAnswers = payload.preferences.answersHumanized || [];
+    const brainotypeId = String(payload.preferences.brainotype?.primary || "").trim().toLowerCase();
+    const learningStyleKey = String(payload.preferences.brainotype?.learningStyle || "").trim();
+    const brainotypeName = BRAINOTYPE_NAMES[brainotypeId] || "Unknown Brainotype";
+    const learningStyleName = LEARNING_STYLE_NAMES[learningStyleKey] || "Unknown Learning Style";
     const prompt = [
       'You are generating personalised study insights.',
-      'The user has been classified as:',
-      `Brainosaur type: ${payload.preferences.brainotype?.primary || 'Unknown'}`,
-      `Learning style: ${payload.preferences.brainotype?.learningStyle || 'Unknown'}`,
-      'Based on their questionnaire answers, generate personalised feedback.',
-      'Explain:',
-      '1. Their likely study behaviour patterns',
+      `The user's Brainotype is: ${brainotypeName}`,
+      `The user's Learning Style is: ${learningStyleName}`,
+      'Based on their questionnaire answers, generate personalised feedback:',
+      '1. Likely study behaviour patterns',
       '2. Strengths of this learning style',
-      '3. Common challenges for this brainosaur type',
-      '4. Specific study suggestions tailored to both their dinosaur type and learning style',
-      'Keep the tone encouraging and practical.',
+      '3. Common challenges for this Brainotype',
+      '4. Specific study suggestions tailored to both Brainotype and Learning Style',
+      'Do not create any new persona name. Use only the actual Brainotype and Learning Style.',
+      'Keep the tone friendly, encouraging, and practical.',
       'Use short sections and bullet points.',
       'Questionnaire answers:',
       JSON.stringify(humanizedAnswers, null, 2),

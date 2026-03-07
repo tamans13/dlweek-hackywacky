@@ -103,8 +103,9 @@ const questions = [
     id: "learning-style-understanding",
     question: "When you try to understand something difficult, what helps most?",
     options: [
-      { value: "visual", label: "Seeing diagrams, charts, or written explanations" },
+      { value: "visual", label: "Seeing diagrams, charts, or visual explanations" },
       { value: "auditory", label: "Hearing someone explain it or discussing it" },
+      { value: "readingWriting", label: "Reading detailed explanations or writing notes" },
       { value: "kinesthetic", label: "Trying it yourself or working through examples" },
     ],
   },
@@ -112,8 +113,9 @@ const questions = [
     id: "learning-style-revision",
     question: "When revising for a test, you usually prefer to:",
     options: [
-      { value: "visual", label: "Use mind maps, notes, or visual summaries" },
+      { value: "visual", label: "Use mind maps, diagrams, or visual summaries" },
       { value: "auditory", label: "Explain concepts out loud or listen to explanations" },
+      { value: "readingWriting", label: "Write summaries or rewrite notes to organise ideas" },
       { value: "kinesthetic", label: "Practice problems or physically work through steps" },
     ],
   },
