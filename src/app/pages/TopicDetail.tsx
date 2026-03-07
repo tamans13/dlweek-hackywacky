@@ -13,6 +13,7 @@ import {
   Loader2,
   Play,
   Square,
+  Eye,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { useAppData } from "../state/AppDataContext";
@@ -481,6 +482,11 @@ export default function TopicDetail() {
     navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/spaced-review`);
   };
 
+  const handleOpenVisualLab = () => {
+    if (!moduleName || !topicName) return;
+    navigate(`/dashboard/modules/${toSlug(moduleName)}/topics/${toSlug(topicName)}/visual-lab`);
+  };
+
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading topic...</div>;
   }
@@ -534,17 +540,23 @@ export default function TopicDetail() {
         <div className="bg-card border border-border rounded-lg p-5">
           <div className="flex items-center justify-between gap-4 mb-3">
             <h3 className="font-medium text-foreground text-lg">Topic Study Session</h3>
-            {!activeTopicSession ? (
-              <Button onClick={handleStartTopicSession} disabled={Boolean(activeSession && !activeTopicSession)}>
-                <Play className="w-4 h-4 mr-2" />
-                Start Study Session
+            <div className="flex flex-col items-end gap-2">
+              {!activeTopicSession ? (
+                <Button onClick={handleStartTopicSession} disabled={Boolean(activeSession && !activeTopicSession)}>
+                  <Play className="w-4 h-4 mr-2" />
+                  Start Study Session
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={handleEndTopicSession}>
+                  <Square className="w-4 h-4 mr-2" />
+                  End Session
+                </Button>
+              )}
+              <Button variant="outline" onClick={handleOpenVisualLab}>
+                <Eye className="w-4 h-4 mr-2" />
+                Visual Lab
               </Button>
-            ) : (
-              <Button variant="outline" onClick={handleEndTopicSession}>
-                <Square className="w-4 h-4 mr-2" />
-                End Session
-              </Button>
-            )}
+            </div>
           </div>
 
           {activeTopicSession ? (
