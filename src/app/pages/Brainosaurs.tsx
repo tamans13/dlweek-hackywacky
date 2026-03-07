@@ -52,10 +52,18 @@ const formatLearningStyle = (styleId: string | null) => {
 export default function BrainotypePage() {
   const { state } = useAppData();
   const [brainotypeResult, setBrainotypeResult] = useState<BrainotypeResult | null>(null);
+  const [openInsightPanels, setOpenInsightPanels] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setBrainotypeResult(readBrainotypeResult());
   }, []);
+
+  const toggleInsightPanel = (panelId: string) => {
+    setOpenInsightPanels((prev) => ({
+      ...prev,
+      [panelId]: !prev[panelId],
+    }));
+  };
 
   const primaryBrainotype = useMemo(() => {
     if (!brainotypeResult) return null;
@@ -105,13 +113,7 @@ export default function BrainotypePage() {
       <div className="mx-auto w-full max-w-6xl">
         <section className="space-y-8 rounded-[32px] border border-border bg-card px-6 py-8 shadow-xl">
           <header className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-              Brainotype
-            </p>
             <h1 className="text-3xl font-semibold text-foreground">Brainotype Profile</h1>
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              See your calculated dinosaur type, learning style, and the insights AI generates from both.
-            </p>
           </header>
 
           {primaryBrainotype ? (
@@ -156,73 +158,132 @@ export default function BrainotypePage() {
 
           <div className="space-y-5">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-                Personalised Summary
-              </p>
               <h2 className="text-2xl font-semibold text-foreground">Insights tailored to your Brainotype + learning style</h2>
-              <p className="text-sm text-muted-foreground">
-                These takeaways combine your questionnaire answers, calculated dinosaur type, and chosen VARK style.
-              </p>
             </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
-                <h3 className="text-sm font-semibold text-foreground">What we notice about your study style</h3>
-                <p className="mt-3 text-sm text-muted-foreground">{observation}</p>
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              <article className="self-start rounded-2xl border border-border bg-background/60 p-4 transition-all duration-200 hover:border-primary/40 hover:shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => toggleInsightPanel("notice")}
+                  aria-expanded={!!openInsightPanels.notice}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/30 px-4 py-3 text-left transition-colors duration-150 hover:bg-white/50"
+                >
+                  <h3 className="text-sm font-semibold text-foreground">What we notice about your study style</h3>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${openInsightPanels.notice ? "rotate-180" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <path d="M5 7.5L10 12.5L15 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {openInsightPanels.notice && (
+                  <p className="px-4 pb-2 pt-3 text-sm text-muted-foreground">{observation}</p>
+                )}
               </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
-                <h3 className="text-sm font-semibold text-foreground">What works well for you</h3>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {primaryBrainotype
-                    ? `You lean on ${primaryBrainotype.tagline.toLowerCase()} energy with ${learningStyleLabel.toLowerCase()} clarity.`
-                    : "We will surface your strengths once classification completes."}
-                </p>
-                <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-                  {highlightTechniques.map((technique) => (
-                    <li key={technique.title} className="list-disc pl-4">
-                      <span className="font-semibold text-foreground">{technique.title}:</span> {technique.description}
+              <article className="self-start rounded-2xl border border-border bg-background/60 p-4 transition-all duration-200 hover:border-primary/40 hover:shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => toggleInsightPanel("works")}
+                  aria-expanded={!!openInsightPanels.works}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/30 px-4 py-3 text-left transition-colors duration-150 hover:bg-white/50"
+                >
+                  <h3 className="text-sm font-semibold text-foreground">What works well for you</h3>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${openInsightPanels.works ? "rotate-180" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <path d="M5 7.5L10 12.5L15 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {openInsightPanels.works && (
+                  <>
+                    <p className="px-4 pt-3 text-sm text-muted-foreground">
+                      {primaryBrainotype
+                        ? `You lean on ${primaryBrainotype.tagline.toLowerCase()} energy with ${learningStyleLabel.toLowerCase()} clarity.`
+                        : "We will surface your strengths once classification completes."}
+                    </p>
+                    <ul className="px-4 pb-2 pt-3 space-y-2 text-sm text-muted-foreground">
+                      {highlightTechniques.map((technique) => (
+                        <li key={technique.title} className="list-disc pl-4">
+                          <span className="font-semibold text-foreground">{technique.title}:</span> {technique.description}
+                        </li>
+                      ))}
+                      {!highlightTechniques.length && (
+                        <li className="text-muted-foreground">AI insights are still arriving.</li>
+                      )}
+                    </ul>
+                  </>
+                )}
+              </article>
+              <article className="self-start rounded-2xl border border-border bg-background/60 p-4 transition-all duration-200 hover:border-primary/40 hover:shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => toggleInsightPanel("challenges")}
+                  aria-expanded={!!openInsightPanels.challenges}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/30 px-4 py-3 text-left transition-colors duration-150 hover:bg-white/50"
+                >
+                  <h3 className="text-sm font-semibold text-foreground">Potential challenges</h3>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${openInsightPanels.challenges ? "rotate-180" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <path d="M5 7.5L10 12.5L15 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {openInsightPanels.challenges && (
+                  <ul className="px-4 pb-2 pt-3 space-y-2 text-sm text-muted-foreground">
+                    <li>
+                      <span className="font-semibold text-foreground">Focus pattern:</span> {focusPattern}
                     </li>
-                  ))}
-                  {!highlightTechniques.length && (
-                    <li className="text-muted-foreground">AI insights are still arriving.</li>
-                  )}
-                </ul>
-              </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
-                <h3 className="text-sm font-semibold text-foreground">Potential challenges</h3>
-                <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-                  <li>
-                    <span className="font-semibold text-foreground">Focus pattern:</span> {focusPattern}
-                  </li>
-                  <li>
-                    <span className="font-semibold text-foreground">Break behaviour:</span> {breakBehaviour}
-                  </li>
-                  <li>
-                    <span className="font-semibold text-foreground">Fatigue signals:</span> {fatigueSignals}
-                  </li>
-                  <li>
-                    <span className="font-semibold text-foreground">Study scheduling:</span> {schedulingPatterns}
-                  </li>
-                </ul>
-              </article>
-              <article className="rounded-2xl border border-border bg-background/60 p-6 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default">
-                <h3 className="text-sm font-semibold text-foreground">Suggestions to improve</h3>
-                <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-                  {suggestionTechniques.map((technique) => (
-                    <li key={technique.title} className="list-disc pl-4">
-                      <span className="font-semibold text-foreground">{technique.title}:</span> {technique.description}
+                    <li>
+                      <span className="font-semibold text-foreground">Break behaviour:</span> {breakBehaviour}
                     </li>
-                  ))}
-                  {!suggestionTechniques.length && (
-                    <li className="text-muted-foreground">{suggestionsFallback}</li>
-                  )}
-                </ul>
+                    <li>
+                      <span className="font-semibold text-foreground">Fatigue signals:</span> {fatigueSignals}
+                    </li>
+                    <li>
+                      <span className="font-semibold text-foreground">Study scheduling:</span> {schedulingPatterns}
+                    </li>
+                  </ul>
+                )}
+              </article>
+              <article className="self-start rounded-2xl border border-border bg-background/60 p-4 transition-all duration-200 hover:border-primary/40 hover:shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => toggleInsightPanel("suggestions")}
+                  aria-expanded={!!openInsightPanels.suggestions}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/30 px-4 py-3 text-left transition-colors duration-150 hover:bg-white/50"
+                >
+                  <h3 className="text-sm font-semibold text-foreground">Suggestions to improve</h3>
+                  <svg
+                    viewBox="0 0 20 20"
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${openInsightPanels.suggestions ? "rotate-180" : ""}`}
+                    aria-hidden="true"
+                  >
+                    <path d="M5 7.5L10 12.5L15 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {openInsightPanels.suggestions && (
+                  <ul className="px-4 pb-2 pt-3 space-y-2 text-sm text-muted-foreground">
+                    {suggestionTechniques.map((technique) => (
+                      <li key={technique.title} className="list-disc pl-4">
+                        <span className="font-semibold text-foreground">{technique.title}:</span> {technique.description}
+                      </li>
+                    ))}
+                    {!suggestionTechniques.length && (
+                      <li className="text-muted-foreground">{suggestionsFallback}</li>
+                    )}
+                  </ul>
+                )}
               </article>
             </div>
           </div>
 
           <div className="space-y-6">
             <div>
-              <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Brainotype guide</p>
               <h2 className="text-2xl font-semibold text-foreground">All Brainotypes</h2>
             </div>
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 lg:auto-rows-fr">
@@ -243,9 +304,9 @@ export default function BrainotypePage() {
                     />
                   </div>
                   <div className="mt-1 text-lg font-semibold text-foreground">{type.name}</div>
-                  <ul className="mt-2 space-y-1 text-left text-sm leading-relaxed text-muted-foreground">
+                  <ul className="mt-2 space-y-1 pl-5 text-left text-sm leading-relaxed text-muted-foreground">
                     {type.bullets.map((bullet) => (
-                      <li key={`${type.name}-${bullet}`} className="list-disc pl-4">
+                      <li key={`${type.name}-${bullet}`} className="list-disc">
                         {bullet}
                       </li>
                     ))}
@@ -257,9 +318,6 @@ export default function BrainotypePage() {
 
           <div className="border-t border-border pt-8 space-y-6">
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.4em] text-muted-foreground">
-                Learning Styles (VARK)
-              </p>
               <h2 className="text-2xl font-semibold text-foreground">Understanding the full framework</h2>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -269,9 +327,9 @@ export default function BrainotypePage() {
                   className="rounded-2xl border border-border bg-background/60 p-6 text-center hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/40 transition-all duration-200 cursor-default"
                 >
                   <div className="text-lg font-semibold text-foreground">{style.name}</div>
-                  <ul className="mt-3 mx-auto max-w-[220px] space-y-2 text-left text-sm text-muted-foreground">
+                  <ul className="mt-3 space-y-2 pl-5 text-left text-sm text-muted-foreground">
                     {style.bullets.map((bullet) => (
-                      <li key={`${style.name}-${bullet}`} className="list-disc pl-4">
+                      <li key={`${style.name}-${bullet}`} className="list-disc">
                         {bullet}
                       </li>
                     ))}
