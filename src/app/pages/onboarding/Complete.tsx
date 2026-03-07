@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
-import { CheckCircle2, Brain } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useAppData } from "../../state/AppDataContext";
 import { generateOnboardingPersona } from "../../lib/api";
 import type { OnboardingPersonaAnalysis } from "../../lib/api";
+import { storeOnboardingPersona } from "../../lib/onboardingPersona";
+import { brainotypeById, type Brainotype, type BrainotypeId } from "../../lib/brainotypes";
+import { learningStyleLabels, type LearningStyleId } from "../../lib/brainotype-scoring";
 
 const fallbackAnalysis: OnboardingPersonaAnalysis = {
   learningStyle: "Balanced Adaptive Learner",
@@ -41,12 +44,15 @@ function readSessionJson<T>(key: string, fallback: T): T {
 
 export default function OnboardingComplete() {
   const navigate = useNavigate();
-  const { saveProfileData } = useAppData();
+  const { signupUser, saveProfileData } = useAppData();
   const [submitting, setSubmitting] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(true);
   const [analysisError, setAnalysisError] = useState("");
+  const [authError, setAuthError] = useState("");
   const [aiEnabled, setAiEnabled] = useState(false);
   const [analysis, setAnalysis] = useState<OnboardingPersonaAnalysis>(fallbackAnalysis);
+  const [brainotypeSnapshot, setBrainotypeSnapshot] = useState<Brainotype | null>(null);
+  const [learningStyleLabel, setLearningStyleLabel] = useState("Learning Style not set");
 
   useEffect(() => {
     let cancelled = false;
@@ -58,13 +64,18 @@ export default function OnboardingComplete() {
       try {
         const welcome = readSessionJson<Record<string, unknown>>("onboarding_welcome", {});
         const prefs = readSessionJson<Record<string, unknown>>("onboarding_preferences", {});
+        const storedBrainotype = (prefs as Record<string, any>).brainotype || {};
+        const primaryId = String(storedBrainotype.primary || "") as BrainotypeId;
+        setBrainotypeSnapshot(brainotypeById[primaryId] || null);
+        const learningKey = String(storedBrainotype.learningStyle || "") as LearningStyleId;
+        setLearningStyleLabel(learningStyleLabels[learningKey] || "Learning Style not set");
 
         const result = await generateOnboardingPersona({ welcome, prefs });
         if (cancelled) return;
 
         setAnalysis(result.analysis);
         setAiEnabled(result.aiEnabled);
-        sessionStorage.setItem("onboarding_persona", JSON.stringify(result.analysis));
+        storeOnboardingPersona(result.analysis);
       } catch (err) {
         if (cancelled) return;
         setAnalysis(fallbackAnalysis);
@@ -83,16 +94,32 @@ export default function OnboardingComplete() {
 
   const handleGoDashboard = async () => {
     setSubmitting(true);
+    setAuthError("");
     try {
       const welcome = readSessionJson<Record<string, unknown>>("onboarding_welcome", {});
+      const email = String(welcome.email || "").trim();
+      const password = String(welcome.password || "");
+
+      if (!email || !password) {
+        throw new Error("Missing email/password from onboarding. Go back and enter credentials.");
+      }
+
+      await signupUser(email, password);
+
+      const onboardingPersona = readSessionJson<OnboardingPersonaAnalysis>("onboarding_persona", analysis);
 
       await saveProfileData({
+        fullName: String(welcome.fullName || welcome.name || ""),
+        email,
         university: String(welcome.university || ""),
         yearOfStudy: String(welcome.year || ""),
         courseOfStudy: String(welcome.course || ""),
         modules: [],
+        onboardingPersona,
       });
       navigate("/dashboard");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Failed to sign up and save your profile.");
     } finally {
       setSubmitting(false);
     }
@@ -113,20 +140,35 @@ export default function OnboardingComplete() {
 
       <div className="bg-card border border-border rounded-2xl p-8 shadow-sm">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Brain className="w-7 h-7 text-primary" />
+          <div className="w-12 h-12 rounded-xl overflow-hidden border border-border bg-primary/10">
+            <img
+              src={brainotypeSnapshot?.image || "/brainosaur.jpg"}
+              alt="Brainosaur dinosaur logo"
+              className="w-full h-full object-cover"
+            />
           </div>
           <div>
-            <h3 className="text-sm text-muted-foreground">Preliminary Study Persona</h3>
+            <h3 className="text-sm text-muted-foreground">Preliminary Brainotype Profile</h3>
             <h2 className="text-2xl font-medium text-foreground">
-              {analysisLoading ? "Analyzing your responses..." : analysis.learningStyle}
+              {analysisLoading ? "Analyzing your Brainotype..." : brainotypeSnapshot?.name || "Brainotype pending"}
             </h2>
+            <p className="text-xs text-muted-foreground">
+              {analysisLoading
+                ? "Crunching your questionnaire answers..."
+                : brainotypeSnapshot?.tagline || "We are scoring your responses."}
+            </p>
+            <div className="mt-2 text-xs uppercase tracking-[0.4em] text-muted-foreground">Learning Style</div>
+            <div className="text-lg font-semibold text-foreground">
+              {analysisLoading ? "Analyzing..." : learningStyleLabel}
+            </div>
           </div>
         </div>
 
         <div className="space-y-4 mb-6">
           <p className="text-base text-foreground leading-relaxed">
-            {analysisLoading ? "Generating personalized learning style and techniques using AI..." : analysis.rationale}
+            {analysisLoading
+              ? "Generating personalized Brainotype + Learning Style insights..."
+              : analysis.rationale}
           </p>
 
           <div className="bg-accent/10 border border-accent/20 rounded-lg p-4">
@@ -145,7 +187,7 @@ export default function OnboardingComplete() {
 
           {analysisError && (
             <p className="text-xs text-warning">
-              AI persona unavailable ({analysisError}). Showing fallback recommendations.
+              AI insights unavailable ({analysisError}). Showing fallback recommendations.
             </p>
           )}
 
@@ -154,11 +196,17 @@ export default function OnboardingComplete() {
               AI integration: {aiEnabled ? "enabled" : "not configured (heuristic mode)"}
             </p>
           )}
+
+          {authError && (
+            <p className="text-xs text-destructive">
+              Authentication failed: {authError}
+            </p>
+          )}
         </div>
 
         <div className="pt-4 border-t border-border">
           <p className="text-sm text-muted-foreground italic">
-            This is not your finalized study persona. It may still be updated after observing your study patterns over time.
+            This is not your finalized Brainotype + Learning Style profile. It may still be updated after observing your study patterns over time.
           </p>
         </div>
       </div>

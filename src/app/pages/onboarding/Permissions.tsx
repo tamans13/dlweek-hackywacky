@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
 import { Switch } from "../../components/ui/switch";
 import { Label } from "../../components/ui/label";
-import { Shield, Eye, Brain, Clock } from "lucide-react";
+import { Shield, Eye, Clock } from "lucide-react";
 
 export default function OnboardingPermissions() {
   const navigate = useNavigate();
@@ -14,7 +14,7 @@ export default function OnboardingPermissions() {
   });
 
   const handleContinue = () => {
-    navigate("/onboarding/preferences");
+    navigate("/onboarding/extension");
   };
 
   return (
@@ -95,7 +95,7 @@ export default function OnboardingPermissions() {
           <div className="flex items-start justify-between gap-6">
             <div className="flex gap-4 flex-1">
               <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-                <Brain className="w-5 h-5 text-primary" />
+                <img src="/brainosaur.jpg" alt="Brainosaur dinosaur logo" className="w-full h-full object-cover rounded-lg" />
               </div>
               <div className="space-y-1 flex-1">
                 <Label htmlFor="classifyActivity" className="cursor-pointer text-base">

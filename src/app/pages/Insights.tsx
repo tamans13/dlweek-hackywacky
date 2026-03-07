@@ -1,25 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Clock, AlertTriangle, Info, ArrowRight } from "lucide-react";
-import { Link } from "react-router";
-import { Button } from "../components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Link, useNavigate } from "react-router";
 import { useAppData } from "../state/AppDataContext";
+import { EmptyState } from "../components/EmptyState";
 
 export default function Insights() {
   const { state, loading, error, runInsights } = useAppData();
-  const moduleNames = state ? state.profile.modules : [];
-
-  const [moduleName, setModuleName] = useState("");
+  const navigate = useNavigate();
   const [insightSummary, setInsightSummary] = useState("");
   const [insightActions, setInsightActions] = useState<string[]>([]);
   const [insightLoading, setInsightLoading] = useState(false);
-
-  useEffect(() => {
-    if (!moduleName && moduleNames.length) {
-      setModuleName(moduleNames[0]);
-    }
-  }, [moduleNames, moduleName]);
+  const [insightBootstrapped, setInsightBootstrapped] = useState(false);
 
   const accuracyByTimeData = useMemo(() => {
     if (!state) return [];
@@ -67,10 +59,34 @@ export default function Insights() {
 
   const burnoutTrendData = useMemo(() => {
     if (!state) return [];
-    return Object.entries(state.modules).map(([name, module]) => ({
-      week: name.length > 12 ? `${name.slice(0, 12)}…` : name,
-      score: Math.round(module.burnoutRisk || 0),
-    }));
+    const trend = Array.isArray(state.burnoutTrend) ? state.burnoutTrend : [];
+    const points = trend
+      .map((item) => {
+        const atMs = new Date(item.at).getTime();
+        if (!Number.isFinite(atMs)) return null;
+        const date = new Date(atMs);
+        const label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        return {
+          period: label,
+          score: Math.round(Number(item.score || 0)),
+          at: item.at,
+        };
+      })
+      .filter((item): item is { period: string; score: number; at: string } => Boolean(item))
+      .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+      .slice(-30);
+
+    if (points.length) return points;
+
+    const risks = Object.values(state.modules).map((module) => Number(module.burnoutRisk || 0));
+    if (!risks.length) return [];
+    const averageRisk = Math.round(risks.reduce((sum, value) => sum + value, 0) / risks.length);
+    const today = new Date();
+    return [{
+      period: today.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      score: averageRisk,
+      at: today.toISOString(),
+    }];
   }, [state]);
 
   const focusScore = useMemo(() => {
@@ -81,11 +97,12 @@ export default function Insights() {
   }, [state]);
 
   const burnoutScore = useMemo(() => {
+    if (burnoutTrendData.length) return burnoutTrendData[burnoutTrendData.length - 1].score;
     if (!state) return 0;
     const values = Object.values(state.modules).map((x) => x.burnoutRisk || 0);
     if (!values.length) return 0;
     return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
-  }, [state]);
+  }, [state, burnoutTrendData]);
 
   const peakRange = useMemo(() => {
     if (!accuracyByTimeData.length) return "No data";
@@ -95,10 +112,9 @@ export default function Insights() {
   }, [accuracyByTimeData]);
 
   const handleGenerateInsights = async () => {
-    if (!moduleName) return;
     setInsightLoading(true);
     try {
-      const insights = await runInsights(moduleName);
+      const insights = await runInsights();
       setInsightSummary(insights.summary);
       setInsightActions(insights.actions || []);
     } finally {
@@ -106,12 +122,42 @@ export default function Insights() {
     }
   };
 
+  useEffect(() => {
+    if (!state || insightBootstrapped) return;
+    setInsightBootstrapped(true);
+    void handleGenerateInsights();
+  }, [state, insightBootstrapped]);
+
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading insights...</div>;
   }
 
   if (error) {
     return <div className="p-8 text-destructive">{error}</div>;
+  }
+
+  const hasData = state && (state.quizAttempts.length > 0 || state.studySessions.length > 0);
+
+  if (!hasData) {
+    return (
+      <div className="min-h-screen">
+        <div className="border-b border-border bg-card">
+          <div className="max-w-6xl mx-auto px-6 py-5">
+            <h1 className="text-2xl font-medium text-foreground">Learning Insights</h1>
+            <p className="text-muted-foreground mt-0.5">Analytics on your study patterns and performance</p>
+          </div>
+        </div>
+        <div className="max-w-6xl mx-auto px-6 py-6">
+          <EmptyState
+            illustration="brain"
+            title="No insights available yet"
+            description="Study a bit more and Brainosaur will start generating insights about your strengths and weaknesses."
+            primaryActionLabel="Go to Modules"
+            onPrimaryAction={() => navigate("/dashboard/modules")}
+          />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -130,38 +176,41 @@ export default function Insights() {
               <Info className="w-5 h-5" />
             </button>
           </div>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-            <div className="md:col-span-2">
-              <Select value={moduleName} onValueChange={setModuleName}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select module for AI insights" />
-                </SelectTrigger>
-                <SelectContent>
-                  {moduleNames.map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button onClick={handleGenerateInsights} disabled={!moduleName || insightLoading} className="md:col-span-1">
-              {insightLoading ? "Generating..." : "Generate Insights"}
-            </Button>
-          </div>
+          {insightLoading && (
+            <div className="mt-4 text-sm text-muted-foreground">Generating personalized insights...</div>
+          )}
           {!!insightSummary && (
-            <div className="mt-4 p-4 rounded-lg border border-primary/30 bg-primary/5">
-              <p className="text-sm text-foreground mb-2">{insightSummary}</p>
-              <ul className="space-y-1 text-sm text-muted-foreground">
-                {insightActions.map((item, idx) => (
-                  <li key={`${item}-${idx}`}>• {item}</li>
-                ))}
-              </ul>
+            <div className="mt-4 rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-4">
+              <div>
+                <div className="text-xs font-semibold tracking-wide text-primary uppercase mb-1">
+                  AI Summary
+                </div>
+                <p className="text-sm text-foreground leading-relaxed">
+                  {insightSummary}
+                </p>
+              </div>
+
+              {insightActions.length > 0 && (
+                <div className="pt-3 border-t border-primary/20">
+                  <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase mb-2">
+                    Priority actions for this week
+                  </div>
+                  <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
+                    {insightActions.map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="leading-relaxed">
+                        {item}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Peak Performance Time</h3>
@@ -191,7 +240,7 @@ export default function Insights() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-primary" />
             <h3 className="font-medium text-foreground text-lg">Study Length vs Retention</h3>
@@ -207,17 +256,17 @@ export default function Insights() {
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.01] hover:border-primary/30 transition-all duration-200 cursor-default">
           <div className="flex items-center gap-2 mb-4">
             <AlertTriangle className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-foreground text-lg">Burnout Trend by Module</h3>
+            <h3 className="font-medium text-foreground text-lg">Burnout Trend</h3>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={burnoutTrendData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="week" tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} />
+                  <XAxis dataKey="period" tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} />
                   <YAxis tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }} domain={[0, 100]} />
                   <Tooltip contentStyle={{ backgroundColor: "var(--color-card)", border: "1px solid var(--color-border)", borderRadius: "0.5rem" }} />
                   <Line type="monotone" dataKey="score" stroke="var(--color-warning)" strokeWidth={2} dot={{ fill: "var(--color-warning)", r: 4 }} />
@@ -236,7 +285,7 @@ export default function Insights() {
 
         <Link
           to="/dashboard/profile#study-techniques"
-          className="block bg-primary/5 border-2 border-primary/30 rounded-lg p-6 hover:bg-primary/10 transition-all group"
+          className="block bg-primary/5 border-2 border-primary/30 rounded-lg p-6 hover:bg-primary/10 hover:shadow-2xl hover:-translate-y-2 hover:scale-[1.02] hover:border-primary/60 transition-all duration-200 group"
         >
           <div className="flex items-center justify-between">
             <div className="flex-1">

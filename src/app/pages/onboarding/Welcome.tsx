@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Brain } from "lucide-react";
+
 
 export default function OnboardingWelcome() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
+    fullName: "",
     email: "",
     password: "",
     university: "",
@@ -20,16 +21,29 @@ export default function OnboardingWelcome() {
     navigate("/onboarding/permissions");
   };
 
+  const canContinue =
+    Boolean(formData.email.trim()) &&
+    Boolean(formData.password.trim()) &&
+    formData.password.trim().length >= 6 &&
+    Boolean(formData.university.trim()) &&
+    Boolean(formData.course.trim()) &&
+    Boolean(formData.year.trim());
+
   return (
     <div className="space-y-10">
       {/* Header */}
       <div className="text-center space-y-8 py-8">
         <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Brain className="w-10 h-10 text-primary" />
+          <div className="w-48 h-48 rounded-2xl overflow-hidden bg-primary/10 flex items-center justify-center">
+            <video
+              src="/Brainosaur.mp4"
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover"
+            />
           </div>
         </div>
-        
         <div className="space-y-4">
           <h1 className="text-5xl font-medium text-foreground">
             Understand How You Learn.
@@ -43,17 +57,26 @@ export default function OnboardingWelcome() {
       {/* Form */}
       <div className="bg-card border border-border rounded-lg p-8 max-w-md mx-auto space-y-6">
         <div className="space-y-2">
+          <Label htmlFor="fullName">Full Name</Label>
+          <Input
+            id="fullName"
+            placeholder="your full name"
+            value={formData.fullName}
+            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+            className="bg-input-background"
+          />
+        </div>
+        <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input
             id="email"
             type="email"
-            placeholder="you@university.edu"
+            placeholder="your email"
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
             className="bg-input-background"
           />
         </div>
-
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
           <Input
@@ -65,7 +88,6 @@ export default function OnboardingWelcome() {
             className="bg-input-background"
           />
         </div>
-
         <div className="space-y-2">
           <Label htmlFor="university">School</Label>
           <Input
@@ -76,7 +98,6 @@ export default function OnboardingWelcome() {
             className="bg-input-background"
           />
         </div>
-
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="course">Course</Label>
@@ -88,7 +109,6 @@ export default function OnboardingWelcome() {
               className="bg-input-background"
             />
           </div>
-
           <div className="space-y-2">
             <Label htmlFor="year">Year</Label>
             <Input
@@ -100,14 +120,23 @@ export default function OnboardingWelcome() {
             />
           </div>
         </div>
-
         <Button
           onClick={handleContinue}
-          disabled={!formData.university || !formData.course || !formData.year}
+          disabled={!canContinue}
           className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
         >
           Create My Learning System
         </Button>
+        <p className="text-xs text-muted-foreground">
+          Use the same email/password next time to access your saved modules, documents, and quiz history.
+        </p>
+        <p className="text-xs text-muted-foreground text-center">
+          Returning user?{" "}
+          <Link to="/login" className="text-primary hover:underline">
+            Log in here
+          </Link>
+          .
+        </p>
       </div>
     </div>
   );
