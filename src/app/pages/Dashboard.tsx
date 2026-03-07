@@ -16,6 +16,7 @@ interface CalendarEvent {
   dateKey: string;
   moduleName: string;
   topicName?: string;
+  examName?: string;
   type: CalendarEventType;
 }
 
@@ -232,6 +233,7 @@ export default function Dashboard() {
         id: `exam-${moduleName}-${plan.examDate}`,
         dateKey: dateKeyFromIso(plan.examDate),
         moduleName,
+        examName: plan.examName?.trim() || undefined,
         type: "exam",
       });
     });
@@ -300,6 +302,20 @@ export default function Dashboard() {
     type === "exam"
       ? "bg-orange-300/80 text-orange-950 border border-orange-400/50"
       : "bg-blue-500/20 text-blue-900 border border-blue-500/40";
+
+  const eventLabel = (event: CalendarEvent) => {
+    if (event.type === "spacedRep") {
+      return event.topicName || event.moduleName;
+    }
+    return event.examName || `${event.moduleName} Exam`;
+  };
+
+  const eventTitle = (event: CalendarEvent) => {
+    if (event.type === "spacedRep" && event.topicName) {
+      return `${event.moduleName} - ${event.topicName}`;
+    }
+    return event.type === "exam" ? `${eventLabel(event)} (${event.moduleName})` : event.moduleName;
+  };
 
   if (loading && !state) {
     return <div className="p-8 text-muted-foreground">Loading dashboard...</div>;
@@ -450,9 +466,9 @@ export default function Dashboard() {
                           key={event.id}
                           onClick={() => setSelectedDayKey(dateKey)}
                           className={`w-full text-left text-[11px] px-2 py-1 rounded ${eventClasses(event.type)}`}
-                          title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
+                          title={eventTitle(event)}
                         >
-                          {event.type === "spacedRep" && event.topicName ? event.topicName : event.moduleName}
+                          {eventLabel(event)}
                         </button>
                       ))}
                       {overflowCount > 0 && (
@@ -485,9 +501,9 @@ export default function Dashboard() {
                           key={event.id}
                           onClick={() => setSelectedDayKey(dateKey)}
                           className={`w-full text-left text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}
-                          title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
+                          title={eventTitle(event)}
                         >
-                          {event.type === "spacedRep" && event.topicName ? event.topicName : event.moduleName}
+                          {eventLabel(event)}
                         </button>
                       ))}
                       {overflowCount > 0 && (
@@ -514,9 +530,9 @@ export default function Dashboard() {
                     key={event.id}
                     onClick={() => setSelectedDayKey(dateKeyFromDate(calendarCursor))}
                     className={`w-full text-left text-sm px-3 py-2 rounded ${eventClasses(event.type)}`}
-                    title={event.type === "spacedRep" && event.topicName ? `${event.moduleName} - ${event.topicName}` : event.moduleName}
+                    title={eventTitle(event)}
                   >
-                    {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : event.moduleName}
+                    {event.type === "spacedRep" && event.topicName ? `${event.topicName} (${event.moduleName})` : eventLabel(event)}
                   </button>
                 ))}
                 {!(eventsByDate[dateKeyFromDate(calendarCursor)] || []).length && <p className="text-sm text-muted-foreground">No events for this day.</p>}
@@ -553,7 +569,7 @@ export default function Dashboard() {
                     {event.topicName} <span className="text-muted-foreground font-normal">({event.moduleName})</span>
                   </Link>
                 ) : (
-                  <span className="text-sm text-foreground">{event.moduleName}</span>
+                  <span className="text-sm text-foreground">{eventLabel(event)}</span>
                 )}
                 <span className={`text-xs px-2 py-1 rounded ${eventClasses(event.type)}`}>{event.type === "exam" ? "Exam" : "Spaced Rep"}</span>
               </div>

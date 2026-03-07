@@ -671,6 +671,7 @@ export default function VisualLab() {
               <Input
                 value={conceptInput}
                 onChange={(e) => setConceptInput(e.target.value)}
+                className="placeholder:italic"
                 placeholder="eg. Hooke's Law"
               />
             </div>
@@ -679,7 +680,7 @@ export default function VisualLab() {
               <Textarea
                 value={promptInput}
                 onChange={(e) => setPromptInput(e.target.value)}
-                className="min-h-[42px]"
+                className="min-h-[42px] placeholder:italic border-[#9ab58f] bg-white shadow-sm focus-visible:border-[#5f8f63] focus-visible:ring-[#5f8f63]/25"
                 placeholder="eg. Effect of changing spring stiffness on oscillation frequency"
               />
             </div>
