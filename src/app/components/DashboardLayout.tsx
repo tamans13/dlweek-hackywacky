@@ -63,7 +63,7 @@ export default function DashboardLayout() {
     { icon: TrendingUp, label: "Behavioral Insights", path: "/dashboard/insights" },
     { icon: Target, label: "Exam Readiness", path: "/dashboard/exam-readiness" },
     { icon: User, label: "My Profile", path: "/dashboard/profile" },
-    { icon: Brain, label: "Brainosaurs", path: "/dashboard/brainosaurs" },
+    { icon: Brain, label: "Brainotype", path: "/dashboard/brainotype" },
     { icon: SettingsIcon, label: "Settings", path: "/dashboard/settings" },
   ];
 

@@ -34,7 +34,7 @@ function buildBurnoutSupportMessage(moduleName: string, risk: number) {
 }
 
 function buildPersonaUpdateMessage(learningStyle: string) {
-  return `Your AI study persona has been updated to "${learningStyle}". Tap into My Profile to review your updated persona and the latest suggested study tips.`;
+  return `Your Brainotype + Learning Style insights have been refreshed to "${learningStyle}". Tap into My Profile to review those updates and the latest suggested study tips.`;
 }
 
 function shouldShowBurnoutNudge(moduleName: string, risk: number) {
