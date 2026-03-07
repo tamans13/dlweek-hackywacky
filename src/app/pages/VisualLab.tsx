@@ -31,6 +31,7 @@ import {
 type Vec3 = [number, number, number];
 
 type MoleculeKey = "CH4" | "NH3" | "H2O";
+type MolecularSpec = Extract<VisualizationSpec, { visualizationType: "molecular-geometry-vsepr" }>;
 
 const MOLECULE_META: Record<MoleculeKey, {
   concept: string;
@@ -81,7 +82,7 @@ function angleBetweenDeg(a: Vec3, b: Vec3) {
 }
 
 function moleculeVectors(molecule: MoleculeKey, bondAngleDeg: number, repulsionStrength: number): Vec3[] {
-  const effectiveAngle = clamp(bondAngleDeg + (repulsionStrength - 1) * 7, 85, 125);
+  const effectiveAngle = clamp(bondAngleDeg + (repulsionStrength - 1) * 24, 85, 128);
   const angleRad = (effectiveAngle * Math.PI) / 180;
 
   if (molecule === "CH4") {
@@ -120,6 +121,52 @@ function moleculeVectors(molecule: MoleculeKey, bondAngleDeg: number, repulsionS
 function getDisplayedBondAngle(vectors: Vec3[]) {
   if (vectors.length < 2) return 0;
   return angleBetweenDeg(vectors[0], vectors[1]);
+}
+
+function ensureMolecularSpec(spec: VisualizationSpec | null, primaryConcept = ""): MolecularSpec {
+  if (spec && spec.visualizationType === "molecular-geometry-vsepr") {
+    const moleculeRaw = String(spec.parameters.molecule || "CH4").toUpperCase();
+    const molecule: MoleculeKey = moleculeRaw === "NH3" || moleculeRaw === "H2O" ? moleculeRaw : "CH4";
+    const ideal = MOLECULE_META[molecule].idealAngle;
+    return {
+      ...spec,
+      parameters: {
+        ...spec.parameters,
+        molecule,
+        bondAngleDeg: clamp(Number(spec.parameters.bondAngleDeg || ideal), 85, 125),
+        bondLength: clamp(Number(spec.parameters.bondLength || 1), 0.7, 1.8),
+        repulsionStrength: clamp(Number(spec.parameters.repulsionStrength || 1), 0.5, 1.8),
+      },
+    };
+  }
+
+  const lower = String(primaryConcept || "").toLowerCase();
+  const molecule: MoleculeKey = lower.includes("nh3") || lower.includes("ammonia")
+    ? "NH3"
+    : lower.includes("h2o") || lower.includes("water")
+      ? "H2O"
+      : "CH4";
+
+  return {
+    visualizationType: "molecular-geometry-vsepr",
+    parameters: {
+      molecule,
+      bondAngleDeg: MOLECULE_META[molecule].idealAngle,
+      bondLength: 1,
+      repulsionStrength: 1,
+      showLonePairs: molecule !== "CH4",
+    },
+    notes: "Chemistry VSEPR molecular geometry view",
+    scene: {
+      template: "vsepr_molecular_geometry_v1",
+      controls: ["bondAngleDeg", "bondLength", "repulsionStrength"],
+      features: ["orbitControls", "ballAndStick", "grid", "hoverGuide"],
+    },
+  };
+}
+
+function cloneSpec(spec: VisualizationSpec): VisualizationSpec {
+  return JSON.parse(JSON.stringify(spec)) as VisualizationSpec;
 }
 
 function atomColor(atom: "C" | "N" | "O" | "H") {
@@ -169,7 +216,6 @@ function MolecularViewer({ spec }: { spec: Extract<VisualizationSpec, { visualiz
   const displayedAngle = getDisplayedBondAngle(vectors);
   const meta = MOLECULE_META[molecule];
 
-function labelWithTooltip(label: string, content: string) {
   return (
     <Canvas camera={{ position: [0, 0, 6.2], fov: 48 }}>
       <color attach="background" args={["#f4f8ef"]} />
@@ -199,10 +245,25 @@ function labelWithTooltip(label: string, content: string) {
   );
 }
 
+function labelWithTooltip(label: string, content: string) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-help items-center border-b border-dotted border-[#8fbf9a] text-[#1f3d2e]">
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={8} className="max-w-xs bg-[#1f5a3f] text-[#f5faef]">
+        {content}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
   const [hoveredAtom, setHoveredAtom] = useState<"center" | number | null>(null);
   const vectorsData = useMemo(
-    () => getMoleculeVectors(spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength),
+    () => moleculeVectors(spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength),
     [spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength],
   );
 
@@ -210,7 +271,7 @@ function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
   const hydrogenAtomRadius = 0.24;
   const bondRadius = 0.07;
   const bondLength = spec.parameters.bondLength * 2.2;
-  const atomPositions = vectorsData.vectors.map((v) => new THREE.Vector3(v.x * bondLength, v.y * bondLength, v.z * bondLength));
+  const atomPositions = vectorsData.map((v) => new THREE.Vector3(v[0] * bondLength, v[1] * bondLength, v[2] * bondLength));
   const centerPosition = new THREE.Vector3(0, 0, 0);
   const showGuide = hoveredAtom !== null;
   const guideVertices = useMemo(() => {
@@ -400,7 +461,7 @@ export default function VisualLab() {
 
   const openVisualization = (visualization: TopicVisualization, syncUrl = true) => {
     setActiveVisualization(visualization);
-    setViewerSpec(cloneSpec(visualization.spec));
+    setViewerSpec(ensureMolecularSpec(cloneSpec(visualization.spec), visualization.primaryConcept));
     if (syncUrl) {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
@@ -665,16 +726,16 @@ export default function VisualLab() {
 
         {activeVisualization && viewerSpec ? (
           <div className="rounded-xl border border-[#dbe6d1] bg-white overflow-hidden">
-            <div className="border-b border-[#e2ebd8] px-5 py-4 bg-[#f7fbf1]">
-              <div className="text-xs text-[#6e8d76]">Learning Workspace</div>
-              <div className="text-lg font-semibold text-[#1f3d2e]">{activeVisualization.title}</div>
+            <div className="border-b border-[#16472f] px-5 py-4 bg-[#1f5a3f]">
+              <div className="text-xs text-[#d3efd8]">Learning Workspace</div>
+              <div className="text-lg font-semibold text-[#f2fff4]">{activeVisualization.title}</div>
             </div>
 
             {molecularSpec ? (
               <>
                 <div className="relative min-h-[560px]">
                   <div className="h-[560px]">
-                    <MolecularViewer spec={molecularSpec} />
+                    <VisualSimulationCanvas spec={molecularSpec} />
                   </div>
 
                   <div className="absolute right-4 top-4 w-[min(360px,calc(100%-2rem))] rounded-xl border border-[#cfe2c5] bg-[#fbfff7]/95 p-4 shadow-sm">
@@ -696,13 +757,37 @@ export default function VisualLab() {
                         Demo currently optimized for CH4; {moleculeKey} is included as a secondary template.
                       </div>
                     ) : null}
+
+                    <div className="mt-3 rounded-md border border-[#dce8d5] bg-[#f7fcf3] p-2">
+                      <div className="text-xs font-semibold text-[#476d4d]">Guided Exploration</div>
+                      <ul className="mt-1 space-y-1 text-xs text-[#33563b] list-disc list-inside">
+                        <li>Change repulsion strength and observe how the H-C-H bond angle changes.</li>
+                        <li>Adjust bond length to see hydrogen atoms move closer to or farther from carbon.</li>
+                        <li>Rotate the molecule to inspect the tetrahedral arrangement from multiple views.</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="absolute right-4 bottom-4 rounded-md border border-[#d2e3ca] bg-white/95 px-3 py-2 shadow-sm">
+                    <div className="text-[11px] font-semibold text-[#4d6f53] mb-1">Atom Legend</div>
+                    <div className="flex items-center gap-2 text-xs text-[#2f4a37]">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#e33d3d]" />
+                      Carbon
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-[#2f4a37] mt-1">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#2f70ff]" />
+                      Hydrogen
+                    </div>
                   </div>
                 </div>
 
                 <div className="border-t border-[#e2ebd8] bg-[#f6faef] p-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <label className="text-xs text-[#1f3d2e] block">
-                      Bond Angle: {molecularSpec.parameters.bondAngleDeg.toFixed(1)} deg
+                      {labelWithTooltip(
+                        "Bond Angle",
+                        "Changing Bond Angle adjusts the angle between bonds and shifts the molecular shape.",
+                      )}: {molecularSpec.parameters.bondAngleDeg.toFixed(1)} deg
                       <input
                         type="range"
                         min={85}
@@ -720,7 +805,10 @@ export default function VisualLab() {
                     </label>
 
                     <label className="text-xs text-[#1f3d2e] block">
-                      Bond Length: {molecularSpec.parameters.bondLength.toFixed(2)}
+                      {labelWithTooltip(
+                        "Bond Length",
+                        "Changing Bond Length moves hydrogen atoms closer to or farther from the central atom.",
+                      )}: {molecularSpec.parameters.bondLength.toFixed(2)}
                       <input
                         type="range"
                         min={0.7}
@@ -738,7 +826,10 @@ export default function VisualLab() {
                     </label>
 
                     <label className="text-xs text-[#1f3d2e] block">
-                      Repulsion Strength: {molecularSpec.parameters.repulsionStrength.toFixed(2)}
+                      {labelWithTooltip(
+                        "Repulsion Strength",
+                        "Changing Repulsion Strength simulates stronger or weaker electron pair repulsion, affecting how far bonding directions spread apart and the observed bond angle.",
+                      )}: {molecularSpec.parameters.repulsionStrength.toFixed(2)}
                       <input
                         type="range"
                         min={0.5}
