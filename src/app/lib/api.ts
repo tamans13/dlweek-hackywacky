@@ -226,6 +226,11 @@ export interface PrismVisualizationSpec {
     beamIntensity: number;
   };
   notes?: string;
+  scene?: {
+    template: string;
+    controls: string[];
+    features?: string[];
+  };
 }
 
 export interface SpringVisualizationSpec {
@@ -237,6 +242,10 @@ export interface SpringVisualizationSpec {
     damping: number;
   };
   notes?: string;
+  scene?: {
+    template: string;
+    controls: string[];
+  };
 }
 
 export type VisualizationSpec = PrismVisualizationSpec | SpringVisualizationSpec;
@@ -254,6 +263,19 @@ export interface TopicVisualization {
   promptSummary: string;
   isPrimary: boolean;
   spec: VisualizationSpec;
+  analysis?: {
+    source: string;
+    confidence: number;
+    learningGoal: string;
+    rationale: string;
+    conceptCandidates: Array<{ concept: string; score: number }>;
+    guidedSteps: Array<{
+      id: string;
+      title: string;
+      instruction: string;
+      focusParameter?: string;
+    }>;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -593,7 +615,9 @@ export function generateTopicVisualization(payload: {
     selectedDocumentCount: number;
     extraction: {
       primaryConcept: string;
-      source: "concept-input" | "selected-documents" | string;
+      source: "concept-input" | "selected-documents" | "prompt-input" | "fallback-default" | string;
+      confidence: number;
+      candidates: Array<{ concept: string; score: number }>;
     };
   }>("/api/topic/visual-lab/generate", {
     method: "POST",
