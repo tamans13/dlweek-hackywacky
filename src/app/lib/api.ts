@@ -216,6 +216,23 @@ export interface TopicDocument {
   textExtracted: boolean;
 }
 
+export interface MolecularGeometryVisualizationSpec {
+  visualizationType: "molecular-geometry-vsepr";
+  parameters: {
+    molecule: "CH4" | "NH3" | "H2O";
+    bondAngleDeg: number;
+    bondLength: number;
+    repulsionStrength: number;
+    showLonePairs?: boolean;
+  };
+  notes?: string;
+  scene?: {
+    template: string;
+    controls: string[];
+    features?: string[];
+  };
+}
+
 export interface PrismVisualizationSpec {
   visualizationType: "prism-refraction-3d";
   parameters: {
@@ -248,7 +265,7 @@ export interface SpringVisualizationSpec {
   };
 }
 
-export type VisualizationSpec = PrismVisualizationSpec | SpringVisualizationSpec;
+export type VisualizationSpec = MolecularGeometryVisualizationSpec | PrismVisualizationSpec | SpringVisualizationSpec;
 
 export interface TopicVisualization {
   id: string;
@@ -268,6 +285,13 @@ export interface TopicVisualization {
     confidence: number;
     learningGoal: string;
     rationale: string;
+    teachingFocus?: {
+      centralAtom?: string;
+      surroundingAtoms?: string;
+      emphasis?: string[];
+      targetBondAngleDeg?: number;
+    };
+    liveInsights?: string[];
     conceptCandidates: Array<{ concept: string; score: number }>;
     guidedSteps: Array<{
       id: string;
@@ -602,6 +626,11 @@ export function fetchTopicVisualizations(moduleName: string, topicName: string) 
   return request<{ visualizations: TopicVisualization[] }>(`/api/topic/visual-lab?${query}`);
 }
 
+export function fetchTopicVisualizationById(moduleName: string, topicName: string, id: string) {
+  const query = new URLSearchParams({ moduleName, topicName, id }).toString();
+  return request<{ visualization: TopicVisualization }>(`/api/topic/visual-lab/item?${query}`);
+}
+
 export function generateTopicVisualization(payload: {
   moduleName: string;
   topicName: string;
@@ -615,6 +644,8 @@ export function generateTopicVisualization(payload: {
     selectedDocumentCount: number;
     extraction: {
       primaryConcept: string;
+      molecule?: string;
+      template?: string;
       source: "concept-input" | "selected-documents" | "prompt-input" | "fallback-default" | string;
       confidence: number;
       candidates: Array<{ concept: string; score: number }>;
