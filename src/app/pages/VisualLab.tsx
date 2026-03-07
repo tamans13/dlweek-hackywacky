@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ArrowLeft, ChevronDown, Eye, Loader2, Sparkles, X } from "lucide-react";
+import { Canvas } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
 import { useAppData } from "../state/AppDataContext";
 import { fromSlugMatch, toSlug } from "../lib/ids";
 import { Button } from "../components/ui/button";
@@ -14,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import {
   TopicDocument,
   TopicVisualization,
@@ -25,288 +29,222 @@ import {
 
 type Vec3 = { x: number; y: number; z: number };
 
-function rotatePoint(point: Vec3, yaw: number, pitch: number): Vec3 {
-  const cy = Math.cos(yaw);
-  const sy = Math.sin(yaw);
-  const cp = Math.cos(pitch);
-  const sp = Math.sin(pitch);
-  const x1 = point.x * cy - point.z * sy;
-  const z1 = point.x * sy + point.z * cy;
-  const y2 = point.y * cp - z1 * sp;
-  const z2 = point.y * sp + z1 * cp;
-  return { x: x1, y: y2, z: z2 };
-}
+type MoleculeKey = "CH4" | "NH3" | "H2O";
 
-function project(point: Vec3, width: number, height: number, distance = 6) {
-  const scale = Math.min(width, height) * 0.14;
-  const depth = distance + point.z;
-  return {
-    x: width / 2 + (point.x / depth) * scale * distance,
-    y: height / 2 - (point.y / depth) * scale * distance,
+type MolecularSpec = {
+  visualizationType: "molecular-geometry-vsepr";
+  parameters: {
+    molecule: MoleculeKey;
+    bondAngleDeg: number;
+    bondLength: number;
+    repulsionStrength: number;
+    showLonePairs?: boolean;
   };
-}
-
-function drawLine(ctx: CanvasRenderingContext2D, a: Vec3, b: Vec3, width: number, height: number, color: string, lineWidth = 2) {
-  const p1 = project(a, width, height);
-  const p2 = project(b, width, height);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineWidth;
-  ctx.beginPath();
-  ctx.moveTo(p1.x, p1.y);
-  ctx.lineTo(p2.x, p2.y);
-  ctx.stroke();
-}
-
-function wavelengthToColor(wavelengthNm: number) {
-  const t = Math.max(380, Math.min(700, wavelengthNm));
-  if (t < 450) return "#4C6FFF";
-  if (t < 500) return "#00A6FF";
-  if (t < 570) return "#2DD36F";
-  if (t < 600) return "#F6C744";
-  if (t < 650) return "#FF8B3D";
-  return "#FF4D4D";
-}
-
-function prismRayOutAngle(incidentDeg: number, refractiveIndex: number, prismDeg: number) {
-  const i = (incidentDeg * Math.PI) / 180;
-  const a = (prismDeg * Math.PI) / 180;
-  const n = Math.max(1, refractiveIndex);
-  const r1 = Math.asin(Math.sin(i) / n);
-  const r2Input = n * Math.sin(Math.max(0, a - r1));
-  const r2 = r2Input >= 1 ? Math.PI / 2 : Math.asin(r2Input);
-  return (r2 * 180) / Math.PI;
-}
-
-function prismPhysicsSnapshot(spec: VisualizationSpec) {
-  if (spec.visualizationType !== "prism-refraction-3d") return null;
-  const n1 = 1;
-  const n2 = Math.max(1, spec.parameters.refractiveIndex);
-  const i = (spec.parameters.incidentAngleDeg * Math.PI) / 180;
-  const r = Math.asin(Math.min(1, (n1 / n2) * Math.sin(i)));
-  const critical = n2 > n1 ? Math.asin(n1 / n2) : Math.PI / 2;
-  const tirLikely = r > critical * 0.94 && spec.parameters.incidentAngleDeg >= 52;
-  return {
-    n1,
-    n2,
-    incidentDeg: spec.parameters.incidentAngleDeg,
-    refractedDeg: (r * 180) / Math.PI,
-    criticalDeg: (critical * 180) / Math.PI,
-    tirLikely,
+  scene?: {
+    template?: string;
   };
+  notes?: string;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function parameterConditionMet(spec: VisualizationSpec, parameter: string) {
-  if (spec.visualizationType === "prism-refraction-3d") {
-    if (parameter === "refractiveIndex") return spec.parameters.refractiveIndex >= 1.45;
-    if (parameter === "incidentAngleDeg") return spec.parameters.incidentAngleDeg >= 46;
-    if (parameter === "wavelengthNm") return spec.parameters.wavelengthNm <= 460 || spec.parameters.wavelengthNm >= 620;
-    if (parameter === "beamIntensity") return spec.parameters.beamIntensity >= 0.75;
-    return true;
-  }
-  if (parameter === "springConstant") return spec.parameters.springConstant >= 30;
-  if (parameter === "mass") return spec.parameters.mass >= 1.6;
-  if (parameter === "displacement") return spec.parameters.displacement >= 0.35;
-  if (parameter === "damping") return spec.parameters.damping >= 0.12;
-  return true;
+function normalize(v: Vec3): Vec3 {
+  const mag = Math.hypot(v.x, v.y, v.z) || 1;
+  return { x: v.x / mag, y: v.y / mag, z: v.z / mag };
 }
 
-function VisualSimulationCanvas({
-  spec,
-}: {
-  spec: VisualizationSpec;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [orbitYaw, setOrbitYaw] = useState(0.55);
-  const [orbitPitch, setOrbitPitch] = useState(-0.2);
-  const draggingRef = useRef(false);
-  const lastMouseRef = useRef({ x: 0, y: 0 });
+function angleBetweenDeg(a: Vec3, b: Vec3) {
+  const an = normalize(a);
+  const bn = normalize(b);
+  const c = clamp(an.x * bn.x + an.y * bn.y + an.z * bn.z, -1, 1);
+  return (Math.acos(c) * 180) / Math.PI;
+}
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+function getIdealAngle(molecule: MoleculeKey) {
+  if (molecule === "NH3") return 107;
+  if (molecule === "H2O") return 104.5;
+  return 109.5;
+}
 
-    let raf = 0;
-    const startAt = performance.now();
+function getMoleculeVectors(molecule: MoleculeKey, bondAngleDeg: number, repulsionStrength: number) {
+  const repulsionAngleShift = (repulsionStrength - 1) * 24;
+  const effectiveAngle = clamp(bondAngleDeg + repulsionAngleShift, 86, 128);
+  const angleRad = (effectiveAngle * Math.PI) / 180;
 
-    const draw = (now: number) => {
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-
-      ctx.clearRect(0, 0, width, height);
-      const gradient = ctx.createLinearGradient(0, 0, width, height);
-      if (spec.visualizationType === "prism-refraction-3d") {
-        gradient.addColorStop(0, "#02091D");
-        gradient.addColorStop(1, "#091A40");
-      } else {
-        gradient.addColorStop(0, "#040B21");
-        gradient.addColorStop(1, "#0A1736");
-      }
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
-
-      const elapsed = (now - startAt) / 1000;
-      const yaw = orbitYaw;
-      const pitch = orbitPitch;
-      const rotate = (p: Vec3) => rotatePoint(p, yaw, pitch);
-
-      if (spec.visualizationType === "spring-mass-3d") {
-        const { springConstant, mass, displacement, damping } = spec.parameters;
-        const omega = Math.sqrt(Math.max(0.01, springConstant / Math.max(0.1, mass)));
-        const amp = displacement * Math.exp(-damping * elapsed);
-        const x = amp * Math.cos(omega * elapsed);
-
-        const anchor: Vec3 = { x: -2.4, y: 0.4, z: 0 };
-        const massCenter: Vec3 = { x: -0.2 + x * 2.4, y: 0.4, z: 0 };
-        const coilPoints: Vec3[] = [];
-        const coils = 18;
-        for (let i = 0; i <= coils; i += 1) {
-          const t = i / coils;
-          const px = anchor.x + (massCenter.x - anchor.x) * t;
-          const py = anchor.y + Math.sin(t * Math.PI * 2 * 8) * 0.16;
-          coilPoints.push(rotate({ x: px, y: py, z: 0 }));
-        }
-
-        ctx.strokeStyle = "#2D6A4F";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        const first = project(coilPoints[0], width, height);
-        ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < coilPoints.length; i += 1) {
-          const p = project(coilPoints[i], width, height);
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
-
-        const massSize = 0.55;
-        const cube = [
-          { x: massCenter.x - massSize, y: massCenter.y - massSize, z: -massSize },
-          { x: massCenter.x + massSize, y: massCenter.y - massSize, z: -massSize },
-          { x: massCenter.x + massSize, y: massCenter.y + massSize, z: -massSize },
-          { x: massCenter.x - massSize, y: massCenter.y + massSize, z: -massSize },
-          { x: massCenter.x - massSize, y: massCenter.y - massSize, z: massSize },
-          { x: massCenter.x + massSize, y: massCenter.y - massSize, z: massSize },
-          { x: massCenter.x + massSize, y: massCenter.y + massSize, z: massSize },
-          { x: massCenter.x - massSize, y: massCenter.y + massSize, z: massSize },
-        ].map(rotate);
-
-        const edges = [
-          [0, 1], [1, 2], [2, 3], [3, 0],
-          [4, 5], [5, 6], [6, 7], [7, 4],
-          [0, 4], [1, 5], [2, 6], [3, 7],
-        ];
-        for (const [a, b] of edges) {
-          drawLine(ctx, cube[a], cube[b], width, height, "#1E3A2D", 2.2);
-        }
-      } else {
-        const { incidentAngleDeg, refractiveIndex, wavelengthNm, prismAngleDeg, beamIntensity } = spec.parameters;
-        const prism = [
-          { x: -0.9, y: -1.2, z: -0.7 },
-          { x: 1.15, y: -1.2, z: -0.7 },
-          { x: 0.1, y: 1.1, z: -0.7 },
-          { x: -0.9, y: -1.2, z: 0.7 },
-          { x: 1.15, y: -1.2, z: 0.7 },
-          { x: 0.1, y: 1.1, z: 0.7 },
-        ].map(rotate);
-        const prismEdges = [
-          [0, 1], [1, 2], [2, 0],
-          [3, 4], [4, 5], [5, 3],
-          [0, 3], [1, 4], [2, 5],
-        ];
-
-        ctx.strokeStyle = "rgba(30, 106, 79, 0.85)";
-        ctx.lineWidth = 2.2;
-        for (const [a, b] of prismEdges) {
-          drawLine(ctx, prism[a], prism[b], width, height, "rgba(30, 106, 79, 0.75)", 2);
-        }
-
-        const beamInStart = rotate({ x: -3.2, y: 0.25, z: 0 });
-        const entry = rotate({ x: -1.0, y: 0.25, z: 0 });
-        drawLine(ctx, beamInStart, entry, width, height, `rgba(255,80,80,${beamIntensity})`, 3);
-
-        const baseOut = prismRayOutAngle(incidentAngleDeg, refractiveIndex, prismAngleDeg);
-        const colors = [430, wavelengthNm, 670];
-        const offsets = [-6, 0, 6];
-        for (let i = 0; i < colors.length; i += 1) {
-          const lambda = colors[i];
-          const nShift = refractiveIndex + ((580 - lambda) / 700) * 0.16;
-          const outDeg = baseOut + offsets[i] + (nShift - refractiveIndex) * 16;
-          const outRad = (outDeg * Math.PI) / 180;
-          const inside = rotate({ x: -1.0, y: 0.25, z: 0 });
-          const exit = rotate({ x: 0.9, y: -0.22, z: 0 });
-          const tirLikely = refractiveIndex >= 1.45 && incidentAngleDeg >= 55 && i !== 1;
-          const outEnd = rotate({
-            x: 0.9 + Math.cos(outRad) * 2.5,
-            y: -0.22 + Math.sin(outRad) * 2.5,
-            z: 0.02 * (i - 1),
-          });
-          drawLine(ctx, inside, exit, width, height, `rgba(255,255,255,${0.65 * beamIntensity})`, 2.4);
-          if (tirLikely) {
-            const reflectedEnd = rotate({
-              x: 0.05,
-              y: 0.62,
-              z: 0.02 * (i - 1),
-            });
-            drawLine(ctx, exit, reflectedEnd, width, height, wavelengthToColor(lambda), 2.8);
-          } else {
-            drawLine(ctx, exit, outEnd, width, height, wavelengthToColor(lambda), 2.8);
-          }
-        }
-
-        ctx.fillStyle = "rgba(216, 227, 255, 0.85)";
-        ctx.font = "600 15px sans-serif";
-        ctx.fillText("Snell's Law", width * 0.45, 32);
-        ctx.font = "12px sans-serif";
-        ctx.fillText("n1 sin(theta1) = n2 sin(theta2)", width * 0.41, 50);
-        ctx.fillStyle = "rgba(186, 201, 238, 0.85)";
-        ctx.fillText("Incident Ray", width * 0.28, height * 0.14);
-        ctx.fillText("Refracted Ray", width * 0.58, height * 0.62);
-        ctx.fillText("Medium Boundary", width * 0.44, height * 0.53);
-      }
-
-      ctx.fillStyle = "rgba(182, 200, 235, 0.78)";
-      ctx.font = "12px sans-serif";
-      ctx.fillText("Drag to rotate view", 12, height - 14);
-      raf = window.requestAnimationFrame(draw);
+  if (molecule === "CH4") {
+    const cos = Math.cos(angleRad);
+    const kSq = clamp((2 * (1 + cos)) / Math.max(0.03, 1 - cos), 0.04, 8);
+    const k = Math.sqrt(kSq);
+    const base = [
+      normalize({ x: 1, y: 1, z: k }),
+      normalize({ x: -1, y: -1, z: k }),
+      normalize({ x: 1, y: -1, z: -k }),
+      normalize({ x: -1, y: 1, z: -k }),
+    ];
+    const radialScale = 1 + (repulsionStrength - 1) * 0.22;
+    return {
+      vectors: base.map((v) => ({ x: v.x * radialScale, y: v.y * radialScale, z: v.z * radialScale })),
+      effectiveAngle,
     };
+  }
 
-    raf = window.requestAnimationFrame(draw);
-    return () => window.cancelAnimationFrame(raf);
-  }, [spec, orbitYaw, orbitPitch]);
+  if (molecule === "NH3") {
+    const cos = Math.cos(angleRad);
+    const cosSqPhi = clamp((cos + 0.5) / 1.5, 0.01, 0.98);
+    const phi = Math.acos(Math.sqrt(cosSqPhi));
+    const radialScale = 1 + (repulsionStrength - 1) * 0.2;
+    const vectors = [0, 120, 240].map((azimuth) => {
+      const az = (azimuth * Math.PI) / 180;
+      const v = normalize({
+        x: Math.sin(phi) * Math.cos(az),
+        y: Math.sin(phi) * Math.sin(az),
+        z: -Math.cos(phi),
+      });
+      return { x: v.x * radialScale, y: v.y * radialScale, z: v.z * radialScale };
+    });
+    return { vectors, effectiveAngle };
+  }
 
+  const half = angleRad / 2;
+  const radialScale = 1 + (repulsionStrength - 1) * 0.24;
+  return {
+    vectors: [
+      normalize({ x: Math.sin(half), y: 0, z: Math.cos(half) }),
+      normalize({ x: -Math.sin(half), y: 0, z: Math.cos(half) }),
+    ].map((v) => ({ x: v.x * radialScale, y: v.y * radialScale, z: v.z * radialScale })),
+    effectiveAngle,
+  };
+}
+
+function getObservedAngle(vectors: Vec3[]) {
+  if (vectors.length < 2) return 0;
+  return angleBetweenDeg(vectors[0], vectors[1]);
+}
+
+function ensureMolecularSpec(spec: VisualizationSpec | null, primaryConcept = "Tetrahedral molecular geometry"): MolecularSpec {
+  if (spec && (spec as any).visualizationType === "molecular-geometry-vsepr") {
+    const raw = spec as any;
+    const moleculeRaw = String(raw.parameters?.molecule || "CH4").toUpperCase();
+    const molecule: MoleculeKey = moleculeRaw === "NH3" || moleculeRaw === "H2O" ? moleculeRaw : "CH4";
+    return {
+      visualizationType: "molecular-geometry-vsepr",
+      parameters: {
+        molecule,
+        bondAngleDeg: clamp(Number(raw.parameters?.bondAngleDeg || getIdealAngle(molecule)), 86, 128),
+        bondLength: clamp(Number(raw.parameters?.bondLength || 1), 0.65, 1.9),
+        repulsionStrength: clamp(Number(raw.parameters?.repulsionStrength || 1), 0.5, 1.8),
+        showLonePairs: Boolean(raw.parameters?.showLonePairs),
+      },
+      scene: raw.scene,
+      notes: raw.notes,
+    };
+  }
+
+  const lower = String(primaryConcept || "").toLowerCase();
+  const molecule: MoleculeKey = lower.includes("nh3") || lower.includes("ammonia")
+    ? "NH3"
+    : lower.includes("h2o") || lower.includes("water")
+      ? "H2O"
+      : "CH4";
+
+  return {
+    visualizationType: "molecular-geometry-vsepr",
+    parameters: {
+      molecule,
+      bondAngleDeg: getIdealAngle(molecule),
+      bondLength: 1,
+      repulsionStrength: 1,
+      showLonePairs: molecule !== "CH4",
+    },
+    scene: { template: "vsepr_molecular_geometry_v1" },
+    notes: "Chemistry VSEPR visualisation",
+  };
+}
+
+function cloneSpec(spec: MolecularSpec): MolecularSpec {
+  return JSON.parse(JSON.stringify(spec)) as MolecularSpec;
+}
+
+function labelWithTooltip(label: string, content: string) {
   return (
-    <canvas
-      ref={canvasRef}
-      className="w-full h-full rounded-lg border border-border bg-card"
-      onMouseDown={(e) => {
-        draggingRef.current = true;
-        lastMouseRef.current = { x: e.clientX, y: e.clientY };
-      }}
-      onMouseMove={(e) => {
-        if (!draggingRef.current) return;
-        const dx = e.clientX - lastMouseRef.current.x;
-        const dy = e.clientY - lastMouseRef.current.y;
-        lastMouseRef.current = { x: e.clientX, y: e.clientY };
-        setOrbitYaw((prev) => prev + dx * 0.01);
-        setOrbitPitch((prev) => Math.max(-1.1, Math.min(1.1, prev + dy * 0.01)));
-      }}
-      onMouseUp={() => {
-        draggingRef.current = false;
-      }}
-      onMouseLeave={() => {
-        draggingRef.current = false;
-      }}
-    />
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-help items-center border-b border-dotted border-[#8fbf9a] text-[#1f3d2e]">
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={8} className="max-w-xs bg-[#1f5a3f] text-[#f5faef]">
+        {content}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
-function cloneSpec(spec: VisualizationSpec): VisualizationSpec {
-  return JSON.parse(JSON.stringify(spec)) as VisualizationSpec;
+function VisualSimulationCanvas({ spec }: { spec: MolecularSpec }) {
+  const vectorsData = useMemo(
+    () => getMoleculeVectors(spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength),
+    [spec.parameters.molecule, spec.parameters.bondAngleDeg, spec.parameters.repulsionStrength],
+  );
+
+  const centerAtomRadius = 0.36;
+  const hydrogenAtomRadius = 0.24;
+  const bondRadius = 0.07;
+  const bondLength = spec.parameters.bondLength * 2.2;
+  const atomPositions = vectorsData.vectors.map((v) => new THREE.Vector3(v.x * bondLength, v.y * bondLength, v.z * bondLength));
+  const centerPosition = new THREE.Vector3(0, 0, 0);
+
+  return (
+    <div className="relative w-full h-full rounded-lg border border-[#d8e7cf] bg-card overflow-hidden">
+      <Canvas camera={{ position: [2.9, 2.2, 2.9], fov: 42 }}>
+        <color attach="background" args={["#f6fbf2"]} />
+        <ambientLight intensity={0.68} />
+        <directionalLight position={[4, 5, 4]} intensity={0.95} />
+        <pointLight position={[-3, -2, 5]} intensity={0.45} />
+
+        <mesh position={[0, 0, 0]}>
+          <sphereGeometry args={[centerAtomRadius, 32, 32]} />
+          <meshStandardMaterial color="#e33d3d" roughness={0.5} metalness={0.1} />
+        </mesh>
+
+        {atomPositions.map((to, index) => {
+          const direction = new THREE.Vector3().subVectors(to, centerPosition);
+          const safeDirection = direction.clone().normalize();
+
+          const start = centerPosition.clone().addScaledVector(safeDirection, centerAtomRadius * 0.72);
+          const end = to.clone().addScaledVector(safeDirection, -hydrogenAtomRadius * 0.72);
+          const rod = new THREE.Vector3().subVectors(end, start);
+          const rodLength = Math.max(0.02, rod.length());
+          const midpoint = start.clone().addScaledVector(rod, 0.5);
+          const quaternion = new THREE.Quaternion().setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            safeDirection,
+          );
+
+          return (
+            <group key={index}>
+              <mesh position={midpoint} quaternion={quaternion}>
+                <cylinderGeometry args={[bondRadius, bondRadius, rodLength, 24]} />
+                <meshStandardMaterial color="#d8d8d8" roughness={0.52} metalness={0.1} />
+              </mesh>
+
+              <mesh position={to.toArray()}>
+                <sphereGeometry args={[hydrogenAtomRadius, 32, 32]} />
+                <meshStandardMaterial color="#2f70ff" roughness={0.48} metalness={0.1} />
+              </mesh>
+            </group>
+          );
+        })}
+
+        <OrbitControls enablePan={false} enableZoom zoomSpeed={0.9} minDistance={1.4} maxDistance={12} />
+      </Canvas>
+
+      <div className="absolute left-3 bottom-2 text-[12px] font-semibold text-[#335942] pointer-events-none">
+        Drag to rotate molecule
+      </div>
+    </div>
+  );
 }
 
 export default function VisualLab() {
@@ -324,8 +262,7 @@ export default function VisualLab() {
   const [statusMessage, setStatusMessage] = useState("");
   const [viewerOpen, setViewerOpen] = useState(false);
   const [activeVisualization, setActiveVisualization] = useState<TopicVisualization | null>(null);
-  const [viewerSpec, setViewerSpec] = useState<VisualizationSpec | null>(null);
-  const [guidedStepIndex, setGuidedStepIndex] = useState(0);
+  const [viewerSpec, setViewerSpec] = useState<MolecularSpec | null>(null);
 
   const moduleNames = state ? state.profile.modules : [];
   const moduleName = fromSlugMatch(moduleId || "", moduleNames || []);
@@ -351,8 +288,7 @@ export default function VisualLab() {
           fetchTopicVisualizations(moduleName, topicName),
         ]);
         if (cancelled) return;
-        const docs = docResult.documents;
-        setDocuments(docs);
+        setDocuments(docResult.documents);
         setSavedVisualizations(vizResult.visualizations);
       } catch (err) {
         if (cancelled) return;
@@ -370,8 +306,7 @@ export default function VisualLab() {
 
   const openVisualization = (visualization: TopicVisualization) => {
     setActiveVisualization(visualization);
-    setViewerSpec(cloneSpec(visualization.spec));
-    setGuidedStepIndex(0);
+    setViewerSpec(cloneSpec(ensureMolecularSpec(visualization.spec, visualization.primaryConcept)));
     setViewerOpen(true);
   };
 
@@ -391,6 +326,7 @@ export default function VisualLab() {
       const latest = await fetchTopicVisualizations(moduleName, topicName);
       setSavedVisualizations(latest.visualizations);
       setStatusMessage(`Generated: ${result.extraction.primaryConcept}`);
+      openVisualization(result.visualization);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate visualisation.";
       if (message.toLowerCase().includes("not found") || message.includes("(404)")) {
@@ -411,12 +347,19 @@ export default function VisualLab() {
     return `${selectedDocumentIds.length} documents selected`;
   }, [documents, selectedDocumentIds]);
 
-  const currentGuidedSteps = activeVisualization?.analysis?.guidedSteps || [];
-  const currentStep = currentGuidedSteps[guidedStepIndex] || null;
-  const conditionMet = viewerSpec && currentStep
-    ? parameterConditionMet(viewerSpec, currentStep.focusParameter || "")
-    : false;
-  const prismSnapshot = viewerSpec ? prismPhysicsSnapshot(viewerSpec) : null;
+  const vectorsData = useMemo(() => {
+    if (!viewerSpec) return null;
+    return getMoleculeVectors(
+      viewerSpec.parameters.molecule,
+      viewerSpec.parameters.bondAngleDeg,
+      viewerSpec.parameters.repulsionStrength,
+    );
+  }, [viewerSpec]);
+
+  const observedAngle = useMemo(() => {
+    if (!vectorsData) return 109.5;
+    return getObservedAngle(vectorsData.vectors);
+  }, [vectorsData]);
 
   if (loading && !state) return <div className="p-8 text-muted-foreground">Loading Visual Lab...</div>;
   if (error) return <div className="p-8 text-destructive">{error}</div>;
@@ -501,7 +444,7 @@ export default function VisualLab() {
               value={conceptInput}
               onChange={(e) => setConceptInput(e.target.value)}
               className="placeholder:italic"
-              placeholder="eg. Physics, Hooke's Law"
+              placeholder="eg. Chemistry, VSEPR molecular geometry"
             />
           </div>
 
@@ -511,7 +454,7 @@ export default function VisualLab() {
               value={promptInput}
               onChange={(e) => setPromptInput(e.target.value)}
               className="min-h-24 placeholder:italic"
-              placeholder="eg. How it varies with different variables"
+              placeholder="eg. How repulsion changes CH4 bond arrangement"
             />
           </div>
 
@@ -527,7 +470,7 @@ export default function VisualLab() {
         <div className="bg-card border border-border rounded-lg p-5">
           <h2 className="text-lg font-medium text-foreground mb-4">Saved Visualisations</h2>
           {!savedVisualizations.length && <div className="text-sm text-muted-foreground">No saved visualisations for this topic yet.</div>}
-              <div className="space-y-3">
+          <div className="space-y-3">
             {savedVisualizations.map((viz) => (
               <div key={viz.id} className="border border-border rounded-lg p-3 flex items-center justify-between gap-4">
                 <div className="min-w-0">
@@ -551,203 +494,119 @@ export default function VisualLab() {
         {resourceError && <div className="text-sm text-destructive">{resourceError}</div>}
       </div>
 
-      {viewerOpen && activeVisualization && viewerSpec && (
-        <div className="fixed inset-2 md:inset-4 z-50 bg-[#020818] border border-[#1A2440] rounded-xl shadow-xl flex flex-col overflow-hidden">
-          <div className="px-5 py-3 border-b border-[#1A2440] bg-[#050F26] flex items-center justify-between gap-3">
+      {viewerOpen && activeVisualization && viewerSpec && vectorsData && (
+        <div className="fixed inset-2 md:inset-4 z-50 bg-[#f8fbf6] border border-[#d3e3cb] rounded-xl shadow-xl flex flex-col overflow-hidden">
+          <div className="px-5 py-3 border-b border-[#1d5236] bg-[#1f5a3f] flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-xs text-[#90A4D4]">Interactive Visualisation Workspace</div>
-              <div className="text-lg font-medium text-[#EAF0FF] truncate">{activeVisualization.title}</div>
+              <div className="text-xs text-[#d3efd8]">Learning Workspace</div>
+              <div className="text-lg font-medium text-[#f1fff3] truncate">{activeVisualization.title}</div>
             </div>
             <Button variant="ghost" size="icon" onClick={() => setViewerOpen(false)}>
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4 text-[#e8f9ec]" />
             </Button>
           </div>
 
-          <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[280px_1fr_340px] bg-[#020818]">
-            <div className="border-b lg:border-b-0 lg:border-r border-[#1A2440] p-4 space-y-4 bg-[#061233]">
-              <div className="text-xs font-semibold tracking-[0.08em] text-[#8FA6DA]">OPTICS CONTROLS</div>
-              {viewerSpec.visualizationType === "prism-refraction-3d" ? (
-                <>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Refractive Index: {viewerSpec.parameters.refractiveIndex.toFixed(2)}
-                    <input
-                      type="range"
-                      min={1}
-                      max={2.6}
-                      step={0.01}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.refractiveIndex}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, refractiveIndex: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Incident Angle: {Math.round(viewerSpec.parameters.incidentAngleDeg)} deg
-                    <input
-                      type="range"
-                      min={5}
-                      max={80}
-                      step={1}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.incidentAngleDeg}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, incidentAngleDeg: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Wavelength: {Math.round(viewerSpec.parameters.wavelengthNm)} nm
-                    <input
-                      type="range"
-                      min={380}
-                      max={700}
-                      step={1}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.wavelengthNm}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "prism-refraction-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, wavelengthNm: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                </>
-              ) : (
-                <>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Spring Constant: {viewerSpec.parameters.springConstant.toFixed(1)}
-                    <input
-                      type="range"
-                      min={2}
-                      max={120}
-                      step={0.5}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.springConstant}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "spring-mass-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, springConstant: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Mass: {viewerSpec.parameters.mass.toFixed(2)}
-                    <input
-                      type="range"
-                      min={0.2}
-                      max={8}
-                      step={0.05}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.mass}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "spring-mass-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, mass: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                  <label className="text-xs text-[#C9D5F0] block">
-                    Damping: {viewerSpec.parameters.damping.toFixed(2)}
-                    <input
-                      type="range"
-                      min={0}
-                      max={0.6}
-                      step={0.01}
-                      className="w-full mt-1 accent-[#FFD84D]"
-                      value={viewerSpec.parameters.damping}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        setViewerSpec((prev) => (prev && prev.visualizationType === "spring-mass-3d"
-                          ? { ...prev, parameters: { ...prev.parameters, damping: value } }
-                          : prev));
-                      }}
-                    />
-                  </label>
-                </>
-              )}
-            </div>
-
-            <div className="p-2 md:p-4 min-h-0">
-              <div className="w-full h-full min-h-[420px]">
+          <div className="flex-1 min-h-0 flex flex-col bg-[#f8fbf6]">
+            <div className="relative p-3 md:p-4 min-h-0 flex-1">
+              <div className="w-full h-full min-h-[460px]">
                 <VisualSimulationCanvas spec={viewerSpec} />
               </div>
+
+              <div className="absolute top-6 right-6 w-[300px] rounded-lg border border-[#d2e3ca] bg-white/95 p-3 text-[#1f3d2e] shadow-sm">
+                <div className="text-xs font-semibold tracking-[0.06em] text-[#5d7b60]">LEARNING INSIGHT</div>
+                <div className="text-sm font-semibold mt-1">{activeVisualization.primaryConcept}</div>
+                <div className="text-xs mt-2">Tetrahedral molecules form when four bonding pairs surround a central atom.</div>
+                <div className="text-xs mt-2">The current H-C-H bond angle is {observedAngle.toFixed(1)} deg.</div>
+                <div className="text-xs mt-2">Increasing repulsion pushes bonding pairs further apart and changes observed angle.</div>
+
+                <div className="mt-3 rounded-md border border-[#dce8d5] bg-[#f7fcf3] p-2">
+                  <div className="text-xs font-semibold text-[#476d4d]">Guided Exploration</div>
+                  <ul className="mt-1 space-y-1 text-xs text-[#33563b] list-disc list-inside">
+                    <li>Change repulsion strength and observe how the H-C-H bond angle changes.</li>
+                    <li>Adjust bond length to see hydrogen atoms move closer to or farther from carbon.</li>
+                    <li>Rotate the molecule to inspect the tetrahedral arrangement from multiple views.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="absolute right-6 bottom-6 rounded-md border border-[#d2e3ca] bg-white/95 px-3 py-2 shadow-sm">
+                <div className="text-[11px] font-semibold text-[#4d6f53] mb-1">Atom Legend</div>
+                <div className="flex items-center gap-2 text-xs text-[#2f4a37]">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#e33d3d]" />
+                  Carbon
+                </div>
+                <div className="flex items-center gap-2 text-xs text-[#2f4a37] mt-1">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#2f70ff]" />
+                  Hydrogen
+                </div>
+              </div>
             </div>
 
-            <div className="border-t lg:border-t-0 lg:border-l border-[#1A2440] p-4 overflow-auto space-y-3 bg-[#061233] text-[#D7E2FF]">
-              <div className="text-xs font-semibold tracking-[0.08em] text-[#8FA6DA]">GUIDED INSIGHTS</div>
-              <div className="text-sm font-semibold">{activeVisualization.primaryConcept}</div>
-              <div className="text-xs text-[#A8B8DE]">
-                {activeVisualization.analysis?.learningGoal || "Explore how parameter changes affect the concept in real time."}
-              </div>
+            <div className="border-t border-[#d3e3cb] p-4 bg-[#eef6e9]">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <label className="text-xs text-[#2f4a37] block">
+                  {labelWithTooltip(
+                    "Bond Angle",
+                    "Changing Bond Angle adjusts the angle between bonds and shifts the molecular shape.",
+                  )}: {viewerSpec.parameters.bondAngleDeg.toFixed(1)} deg
+                  <input
+                    type="range"
+                    min={86}
+                    max={128}
+                    step={0.1}
+                    className="w-full mt-1 accent-[#2f7a4f]"
+                    value={viewerSpec.parameters.bondAngleDeg}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      setViewerSpec((prev) => (prev
+                        ? { ...prev, parameters: { ...prev.parameters, bondAngleDeg: value } }
+                        : prev));
+                    }}
+                  />
+                </label>
 
-              <div className="text-xs text-[#C9D5F0] rounded-md border border-[#1A2440] p-2 bg-[#040E2A]">
-                {viewerSpec.visualizationType === "prism-refraction-3d" && prismSnapshot ? (
-                  <>
-                    <div>Incident: {prismSnapshot.incidentDeg.toFixed(1)} deg</div>
-                    <div>Refracted (approx): {prismSnapshot.refractedDeg.toFixed(1)} deg</div>
-                    <div>n1 to n2: {prismSnapshot.n1.toFixed(2)} to {prismSnapshot.n2.toFixed(2)}</div>
-                  </>
-                ) : (
-                  <>
-                    <div>Spring k: {viewerSpec.parameters.springConstant.toFixed(1)}</div>
-                    <div>Mass: {viewerSpec.parameters.mass.toFixed(2)}</div>
-                    <div>Damping: {viewerSpec.parameters.damping.toFixed(2)}</div>
-                  </>
-                )}
-              </div>
+                <label className="text-xs text-[#2f4a37] block">
+                  {labelWithTooltip(
+                    "Bond Length",
+                    "Changing Bond Length moves hydrogen atoms closer to or farther from the central carbon atom.",
+                  )}: {viewerSpec.parameters.bondLength.toFixed(2)}
+                  <input
+                    type="range"
+                    min={0.65}
+                    max={1.9}
+                    step={0.01}
+                    className="w-full mt-1 accent-[#2f7a4f]"
+                    value={viewerSpec.parameters.bondLength}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      setViewerSpec((prev) => (prev
+                        ? { ...prev, parameters: { ...prev.parameters, bondLength: value } }
+                        : prev));
+                    }}
+                  />
+                </label>
 
-              <div className="text-xs text-[#C9D5F0] rounded-md border border-[#1A2440] p-2 bg-[#040E2A] space-y-1">
-                {viewerSpec.visualizationType === "prism-refraction-3d" ? (
-                  <>
-                    <div>Light bends more toward the normal in denser material.</div>
-                    <div>{prismSnapshot?.tirLikely ? "At this setting, total internal reflection is likely starting." : "Current settings favor refraction-dominant behavior."}</div>
-                  </>
-                ) : (
-                  <>
-                    <div>Higher spring constant increases oscillation frequency.</div>
-                    <div>Higher damping reduces amplitude more quickly.</div>
-                  </>
-                )}
+                <label className="text-xs text-[#2f4a37] block">
+                  {labelWithTooltip(
+                    "Repulsion Strength",
+                    "Changing Repulsion Strength simulates stronger or weaker electron pair repulsion, spreading or contracting bond directions and changing observed bond angle.",
+                  )}: {viewerSpec.parameters.repulsionStrength.toFixed(2)}
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={1.8}
+                    step={0.01}
+                    className="w-full mt-1 accent-[#2f7a4f]"
+                    value={viewerSpec.parameters.repulsionStrength}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      setViewerSpec((prev) => (prev
+                        ? { ...prev, parameters: { ...prev.parameters, repulsionStrength: value } }
+                        : prev));
+                    }}
+                  />
+                </label>
               </div>
-
-              {currentStep && (
-                <div className="rounded-md border border-[#1A2440] p-3 bg-[#040E2A] space-y-2">
-                  <div className="text-[11px] text-[#8FA6DA]">Step {guidedStepIndex + 1} / {currentGuidedSteps.length || 1}</div>
-                  <div className="text-sm font-medium">{currentStep.title}</div>
-                  <div className="text-xs text-[#B6C4E9]">{currentStep.instruction}</div>
-                  <div className={`text-xs font-medium ${conditionMet ? "text-[#57D18B]" : "text-[#FF7A7A]"}`}>
-                    {conditionMet ? "Condition met" : "Condition not met"}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setGuidedStepIndex((prev) => Math.max(0, prev - 1))}
-                      disabled={guidedStepIndex <= 0}
-                    >
-                      Prev
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setGuidedStepIndex((prev) => Math.min((currentGuidedSteps.length || 1) - 1, prev + 1))}
-                      disabled={guidedStepIndex >= (currentGuidedSteps.length || 1) - 1}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
