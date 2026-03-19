@@ -6519,9 +6519,16 @@ function staticHandler(req, res, pathname) {
   }
 
   const root = staticDir();
-  const filePath = pathname === '/' ? path.join(root, 'index.html') : path.join(root, pathname);
+  let relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+  try {
+    relativePath = decodeURIComponent(relativePath);
+  } catch {
+    // Keep raw path if decoding fails.
+  }
+  const filePath = path.join(root, relativePath);
   const normalized = path.normalize(filePath);
-  if (!normalized.startsWith(root)) {
+  const normalizedRoot = path.normalize(root + path.sep);
+  if (!normalized.startsWith(normalizedRoot)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
