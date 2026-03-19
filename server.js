@@ -28,7 +28,7 @@ function loadDotEnv() {
 loadDotEnv();
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const REVIEW_THRESHOLD = clamp(Number(process.env.REVIEW_THRESHOLD || 70), 0, 100);
