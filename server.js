@@ -5203,6 +5203,27 @@ async function ensureAuthenticatedUser(req, res) {
 async function apiHandler(req, res, parsedUrl) {
   const pathname = parsedUrl.pathname;
 
+  if (pathname === '/api/health') {
+    return send(res, 200, { ok: true, message: 'API is running', supabaseEnabled: SUPABASE_ENABLED });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/auth/debug-login') {
+    // Debug endpoint: always succeeds to test API routing
+    const body = await parseBody(req);
+    const email = String(body.email || 'test@brainosaur.dev').trim().toLowerCase();
+    return send(res, 200, {
+      ok: true,
+      debug: true,
+      user: { id: 'debug-user', email },
+      session: {
+        accessToken: 'debug-token-123',
+        refreshToken: 'debug-refresh',
+        expiresIn: 86400,
+        tokenType: 'bearer',
+      },
+    });
+  }
+
   if (req.method === 'POST' && pathname === '/api/auth/login') {
     const body = await parseBody(req);
     const email = String(body.email || '').trim().toLowerCase();
