@@ -11,6 +11,7 @@
     "dev:api": "node server.js",
     "dev:ui": "vite",
     "dev:full": "node scripts/dev-full.mjs",
+    "build": "vite build",
     "build:ui": "vite build",
     "preview:ui": "vite preview"
   },
