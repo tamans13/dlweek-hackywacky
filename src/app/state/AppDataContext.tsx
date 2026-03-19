@@ -22,6 +22,7 @@ import {
   updateExamPlan,
 } from "../lib/api";
 import { startExtensionTracking, stopExtensionTracking } from "../lib/extension";
+import ErrorFallback from "../components/ErrorFallback";
 
 interface AppDataContextValue {
   state: BackendState | null;
@@ -320,6 +321,18 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       runInsights,
     ],
   );
+
+  // Show error fallback if initial load fails and we're not authenticated
+  if (error && !hasAuthSession()) {
+    return (
+      <AppDataContext.Provider value={value}>
+        <ErrorFallback 
+          error={error} 
+          onRetry={refresh}
+        />
+      </AppDataContext.Provider>
+    );
+  }
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
 }
