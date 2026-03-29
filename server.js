@@ -52,10 +52,22 @@ const LEARNING_STYLE_NAMES = {
   kinesthetic: "Kinesthetic Learner",
 };
 
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  '';
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  '';
 const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'study-files';
+const SUPABASE_MISSING_VARS = [
+  !SUPABASE_URL ? 'SUPABASE_URL (or VITE_SUPABASE_URL)' : null,
+  !SUPABASE_ANON_KEY ? 'SUPABASE_ANON_KEY (or VITE_SUPABASE_ANON_KEY / SUPABASE_PUBLISHABLE_KEY)' : null,
+  !SUPABASE_SERVICE_ROLE_KEY ? 'SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY)' : null,
+].filter(Boolean);
 const SUPABASE_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE_ROLE_KEY);
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -6606,7 +6618,9 @@ server.listen(PORT, HOST, () => {
   if (SUPABASE_ENABLED) {
     console.log('Supabase mode enabled. State and quiz/file persistence use Postgres + Storage.');
   } else {
-    console.log('Supabase mode disabled. Using local file storage only.');
+    console.log(
+      `Supabase mode disabled. Missing env vars: ${SUPABASE_MISSING_VARS.join(', ') || 'unknown'}. Using local file storage only.`
+    );
   }
   console.log(`Server running at http://${HOST}:${PORT}`);
 });
