@@ -12,6 +12,7 @@
     "dev:ui": "vite",
     "dev:full": "node scripts/dev-full.mjs",
     "build": "vite build",
+    "build:render": "npm install && npm run build:ui",
     "build:ui": "vite build",
     "preview:ui": "vite preview",
     "postinstall": "node scripts/postinstall.mjs"
