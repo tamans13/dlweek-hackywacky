@@ -26,6 +26,7 @@
         "overlay.css"
       ],
       "js": [
+        "content.js",
         "overlay.js"
       ],
       "run_at": "document_idle"
