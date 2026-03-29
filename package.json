@@ -11,8 +11,8 @@
     "dev:api": "node server.js",
     "dev:ui": "vite",
     "dev:full": "node scripts/dev-full.mjs",
-    "build": "vite build",
-    "build:render": "npm install && npm run build:ui",
+    "build": "npm install --include=dev --ignore-scripts && npm run build:ui",
+    "build:render": "npm run build",
     "build:ui": "vite build",
     "preview:ui": "vite preview",
     "postinstall": "node scripts/postinstall.mjs"
