@@ -1,40 +1,15 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Brainosaur UI Build Required</title>
-    <style>
-      body {
-        margin: 0;
-        font-family: "Segoe UI", Arial, sans-serif;
-        background: #eef4f7;
-        color: #11243a;
-        display: grid;
-        place-items: center;
-        min-height: 100vh;
-      }
-      .card {
-        width: min(760px, 92vw);
-        background: #fff;
-        border: 1px solid #dbe8f2;
-        border-radius: 12px;
-        padding: 1.2rem 1.4rem;
-      }
-      h1 { margin: 0 0 .5rem 0; }
-      code { background: #f3f7fb; padding: .1rem .35rem; border-radius: 6px; }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>New UI Source Integrated</h1>
-      <p>
-        The Figma-exported React UI has been integrated in <code>src/</code>.
-        Run <code>npm run dev:ui</code> for the new frontend and <code>npm run dev:api</code> for backend APIs.
-      </p>
-      <p>
-        For single-server static hosting, build first with <code>npm run build:ui</code>, then run <code>npm run dev:api</code>.
-      </p>
-    </div>
-  </body>
-</html>
+
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Brainosaur</title>
+    </head>
+
+    <body>
+      <div id="root"></div>
+      <script type="module" src="/src/main.tsx"></script>
+    </body>
+  </html>
+  

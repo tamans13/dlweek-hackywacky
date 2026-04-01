@@ -8,9 +8,11 @@
 
 # Dependencies
 node_modules/
+.npm-cache/
 
 # Runtime data and logs
 data/app-data.json
+uploads/
 dist/
 *.log
 npm-debug.log*

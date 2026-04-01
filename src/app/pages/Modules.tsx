@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { Plus, Calendar, TrendingUp } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { EmptyState } from "../components/EmptyState";
 import { useAppData } from "../state/AppDataContext";
 import { daysUntil, formatDate } from "../lib/format";
 import { toSlug } from "../lib/ids";
@@ -63,16 +64,20 @@ export default function Modules() {
 
       <div className="max-w-6xl mx-auto px-6 py-6">
         {!moduleCards.length ? (
-          <div className="bg-card border border-border rounded-lg p-8 text-center text-muted-foreground">
-            No modules yet. Add your first module to start tracking.
-          </div>
+          <EmptyState
+            illustration="book"
+            title="No modules yet"
+            description="Add your first module to start tracking mastery and study progress."
+            primaryActionLabel="Add Module"
+            onPrimaryAction={handleAddModule}
+          />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {moduleCards.map((module) => (
               <Link
                 key={module.id}
                 to={`/dashboard/modules/${module.id}`}
-                className="block bg-card border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all group"
+                className="block bg-card border border-border rounded-lg p-5 hover:shadow-2xl hover:border-primary/40 hover:-translate-y-2 hover:scale-[1.03] transition-all duration-200 group"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">

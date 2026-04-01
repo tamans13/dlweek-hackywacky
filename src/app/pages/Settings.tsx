@@ -1,28 +1,17 @@
 import { useState } from "react";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { Separator } from "../components/ui/separator";
-import { User, Shield, Brain, Trash2, AlertTriangle } from "lucide-react";
+import { Shield, Trash2, AlertTriangle } from "lucide-react";
 
 export default function Settings() {
-  const [profile, setProfile] = useState({
-    name: "Ranjana",
-    email: "ranjana@university.edu",
-    university: "National University of Singapore",
-    course: "Economics",
-    year: "2",
-  });
-
   const [privacy, setPrivacy] = useState({
     trackSessions: true,
     classifyDistractions: true,
     aiAssistance: true,
     shareAnonymous: false,
   });
-
-  const [aiLevel, setAiLevel] = useState("balanced");
 
   return (
     <div className="min-h-screen">
@@ -35,73 +24,6 @@ export default function Settings() {
       </div>
 
       <div className="max-w-4xl mx-auto px-8 py-8 space-y-8">
-        {/* Profile */}
-        <div className="bg-card border border-border rounded-lg p-6">
-          <div className="flex items-center gap-2 mb-6">
-            <User className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-foreground">Profile Information</h3>
-          </div>
-
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Name</Label>
-                <Input
-                  id="name"
-                  value={profile.name}
-                  onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-                  className="bg-input-background"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={profile.email}
-                  onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                  className="bg-input-background"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="university">University</Label>
-              <Input
-                id="university"
-                value={profile.university}
-                onChange={(e) => setProfile({ ...profile, university: e.target.value })}
-                className="bg-input-background"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="course">Course</Label>
-                <Input
-                  id="course"
-                  value={profile.course}
-                  onChange={(e) => setProfile({ ...profile, course: e.target.value })}
-                  className="bg-input-background"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="year">Year of Study</Label>
-                <Input
-                  id="year"
-                  value={profile.year}
-                  onChange={(e) => setProfile({ ...profile, year: e.target.value })}
-                  className="bg-input-background"
-                />
-              </div>
-            </div>
-
-            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground">
-              Save Changes
-            </Button>
-          </div>
-        </div>
-
         {/* Privacy & Data Tracking */}
         <div className="bg-card border border-border rounded-lg p-6">
           <div className="flex items-center gap-2 mb-6">
@@ -178,97 +100,6 @@ export default function Settings() {
                   setPrivacy({ ...privacy, shareAnonymous: checked })
                 }
               />
-            </div>
-          </div>
-        </div>
-
-        {/* AI Personalization */}
-        <div className="bg-card border border-border rounded-lg p-6">
-          <div className="flex items-center gap-2 mb-6">
-            <Brain className="w-5 h-5 text-primary" />
-            <h3 className="font-medium text-foreground">AI Personalization Level</h3>
-          </div>
-
-          <div className="space-y-4">
-            <div
-              onClick={() => setAiLevel("minimal")}
-              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                aiLevel === "minimal"
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:bg-muted/50"
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                    aiLevel === "minimal" ? "border-primary" : "border-muted-foreground"
-                  }`}
-                >
-                  {aiLevel === "minimal" && (
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-foreground">Minimal</div>
-                  <div className="text-sm text-muted-foreground">
-                    Basic tracking and stats only. No predictive insights.
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div
-              onClick={() => setAiLevel("balanced")}
-              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                aiLevel === "balanced"
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:bg-muted/50"
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                    aiLevel === "balanced" ? "border-primary" : "border-muted-foreground"
-                  }`}
-                >
-                  {aiLevel === "balanced" && (
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-foreground">Balanced (Recommended)</div>
-                  <div className="text-sm text-muted-foreground">
-                    Moderate AI insights and study recommendations.
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div
-              onClick={() => setAiLevel("aggressive")}
-              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                aiLevel === "aggressive"
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:bg-muted/50"
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                    aiLevel === "aggressive" ? "border-primary" : "border-muted-foreground"
-                  }`}
-                >
-                  {aiLevel === "aggressive" && (
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-foreground">Aggressive</div>
-                  <div className="text-sm text-muted-foreground">
-                    Maximum AI assistance with proactive interventions.
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>

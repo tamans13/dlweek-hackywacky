@@ -2,12 +2,35 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { User, Brain, Edit2, Save } from "lucide-react";
+import { User, Edit2, Save } from "lucide-react";
 import { useAppData } from "../state/AppDataContext";
+import { getPersonaStorageKeys, PROFILE_FLASH_KEY } from "../lib/persona";
+import { brainotypeById } from "../lib/brainotypes";
+import { BrainotypeResult, learningStyleLabels, readBrainotypeResult } from "../lib/brainotype-scoring";
+
+const defaultPersona = {
+  learningStyle: "Adaptive Mixed Learner",
+  rationale: "Complete more study sessions and quizzes to generate a higher-confidence persona.",
+  studyTechniques: [
+    {
+      title: "Time-Boxing Method",
+      description: "Use 30-60 minute focused blocks with short recovery breaks.",
+    },
+    {
+      title: "Active Recall First",
+      description: "Attempt questions before reviewing notes to expose real weaknesses.",
+    },
+    {
+      title: "Spaced Review Priority",
+      description: "Clear due spaced-repetition topics before new content.",
+    },
+  ],
+};
 
 export default function Profile() {
-  const { state, loading, error, saveProfileData, runInsights } = useAppData();
+  const { state, loading, error, saveProfileData, authUser } = useAppData();
   const [isEditing, setIsEditing] = useState(false);
+  const [highlightPersonaCard, setHighlightPersonaCard] = useState(false);
   const [profileData, setProfileData] = useState({
     name: "",
     email: "",
@@ -16,13 +39,19 @@ export default function Profile() {
     year: "",
     modules: "",
   });
-  const [persona, setPersona] = useState("Adaptive Learner");
-  const [personaSummary, setPersonaSummary] = useState("Complete more quizzes to generate a high-confidence persona.");
+  const [brainotypeResult, setBrainotypeResult] = useState<BrainotypeResult | null>(null);
+  const primaryBrainotype = useMemo(() => {
+    if (!brainotypeResult) return null;
+    return brainotypeById[brainotypeResult.primary];
+  }, [brainotypeResult]);
+  const learningStyleLabel = brainotypeResult ? learningStyleLabels[brainotypeResult.learningStyle] : "Not set";
 
   useEffect(() => {
     if (!state) return;
     setProfileData((prev) => ({
       ...prev,
+      name: state.profile.fullName || "",
+      email: state.profile.email || "",
       school: state.profile.university,
       course: state.profile.courseOfStudy,
       year: state.profile.yearOfStudy,
@@ -30,32 +59,29 @@ export default function Profile() {
     }));
   }, [state]);
 
-  const moduleName = useMemo(() => state?.profile.modules?.[0] || "", [state]);
+  useEffect(() => {
+    if (window.sessionStorage.getItem(PROFILE_FLASH_KEY) !== "1") return;
+    window.sessionStorage.removeItem(PROFILE_FLASH_KEY);
+    setHighlightPersonaCard(true);
+    const timeout = window.setTimeout(() => setHighlightPersonaCard(false), 1600);
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadPersona() {
-      if (!moduleName) return;
-      try {
-        const data = await runInsights(moduleName);
-        if (!cancelled) {
-          const derivedPersona = data.summary.toLowerCase().includes("burnout")
-            ? "Recovery-Oriented Learner"
-            : data.summary.toLowerCase().includes("weak")
-              ? "Targeted Remediation Learner"
-              : "Analytical Burst Learner";
-          setPersona(derivedPersona);
-          setPersonaSummary(data.summary);
-        }
-      } catch {
-        // Keep fallback persona text.
-      }
+    if (!state) return;
+    const personaData = state.personaProfile || state.onboardingPersona || defaultPersona;
+    const learningStyle = String(personaData.learningStyle || defaultPersona.learningStyle).trim();
+
+    const { currentKey, seenKey } = getPersonaStorageKeys(authUser?.email);
+    window.localStorage.setItem(currentKey, learningStyle || defaultPersona.learningStyle);
+    if (!window.localStorage.getItem(seenKey)) {
+      window.localStorage.setItem(seenKey, learningStyle || defaultPersona.learningStyle);
     }
-    void loadPersona();
-    return () => {
-      cancelled = true;
-    };
-  }, [moduleName, runInsights]);
+  }, [state, authUser?.email]);
+
+  useEffect(() => {
+    setBrainotypeResult(readBrainotypeResult());
+  }, []);
 
   const handleSave = async () => {
     if (!state) return;
@@ -65,6 +91,8 @@ export default function Profile() {
       .filter(Boolean);
 
     await saveProfileData({
+      fullName: profileData.name,
+      email: profileData.email,
       university: profileData.school,
       yearOfStudy: profileData.year,
       courseOfStudy: profileData.course,
@@ -150,36 +178,15 @@ export default function Profile() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-6" id="study-techniques">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Brain className="w-7 h-7 text-primary" />
-            </div>
-            <div>
-              <h3 className="font-medium text-foreground text-lg">Learning Style & Study Persona</h3>
-              <p className="text-sm text-muted-foreground">AI-generated insights based on your behavior</p>
-            </div>
-          </div>
-
-          <div className="bg-primary/5 border border-primary/20 rounded-lg p-5 mb-6">
-            <div className="text-sm text-muted-foreground mb-1">Your Study Persona</div>
-            <div className="text-2xl font-medium text-foreground mb-3">{persona}</div>
-            <p className="text-sm text-muted-foreground leading-relaxed">{personaSummary}</p>
-          </div>
-
-          <div className="space-y-3">
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Time-Boxing Method</h5>
-              <p className="text-sm text-muted-foreground">Use 30-60 minute focused blocks with short recovery breaks.</p>
-            </div>
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Active Recall First</h5>
-              <p className="text-sm text-muted-foreground">Attempt questions before reviewing notes to expose real weaknesses.</p>
-            </div>
-            <div className="border border-border rounded-lg p-4">
-              <h5 className="font-medium text-foreground mb-1">Spaced Review Priority</h5>
-              <p className="text-sm text-muted-foreground">Clear due spaced-repetition topics before new content.</p>
-            </div>
+        <div className="bg-card border border-border rounded-lg p-6">
+          <div className="space-y-2">
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Brainotype</p>
+            <p className="text-lg font-semibold text-foreground">{primaryBrainotype?.name || "Not set"}</p>
+            {primaryBrainotype && (
+              <p className="text-sm text-muted-foreground">{primaryBrainotype.tagline}</p>
+            )}
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Learning Style (VARK)</p>
+            <p className="text-lg font-semibold text-foreground">{learningStyleLabel}</p>
           </div>
         </div>
       </div>
